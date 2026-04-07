@@ -17,3 +17,4 @@ __pycache__/ethernet_protocol.cpython-313.pyc
 __pycache__/ethernet_rx.cpython-313.pyc
 __pycache__/ethernet_tx.cpython-313.pyc
 __pycache__/marconi_rx.cpython-313.pyc
+__pycache__/ethernet_tx.cpython-313.pyc
