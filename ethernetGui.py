@@ -1,4 +1,4 @@
-import os, time, random, threading, queue
+import os, time, random, threading, queue, uuid
 import tkinter as tk
 from tkinter import scrolledtext
 import numpy as np  #pip install numpy pyadi-iio
@@ -10,8 +10,25 @@ import marconi_rx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
 import ethernet_tx, ethernet_rx
 
+def get_node_identity():
+    """Reads the PC's MAC address and assigns the 3-character Node ID."""
+    # Grab the 48-bit MAC address and format it into a standard hex string
+    mac_num = uuid.getnode()
+    mac_hex = ':'.join(['{:02x}'.format((mac_num >> elements) & 0xff) for elements in range(0,8*6,8)][::-1])
+    
+    print(f"Hardware MAC Address Detected: {mac_hex}")
+    
+    # --- YOUR MAC ADDRESS DICTIONARY ---
+    known_nodes = {
+        "44:fa:66:57:b0:3a": "001",  # Windows 11 Laptop
+        "11:22:33:44:55:66": "002"   # e.g., Windows 10 Laptop
+    }
+    
+    # Return the mapped ID, or default to "003" if it's an unknown computer
+    return known_nodes.get(mac_hex, "003")
+
 # --- Configuration ---
-MY_ADDRESS = "001"
+MY_ADDRESS = get_node_identity()
 URI = "ip:192.168.2.1"
 FREQ = 433e6
 SAMP_RATE = 1e6
