@@ -9,7 +9,6 @@ import teletype_protocol # New module to handle teletype.
 import marconi_rx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
 import ethernet_tx, ethernet_rx
-#quick change for test
 
 # --- Configuration ---
 MY_ADDRESS = "001"
@@ -191,6 +190,8 @@ class MarconiNode:
 
         self.channel_busy = False
         self.last_rx_state = False  # Tracks previous state to prevent UI flooding
+        self.is_transmitting = False
+        self.just_finished_tx = False
 
         # --- Marconi (OOK) Receiver State ---
         self.m_stream = ""
@@ -247,6 +248,8 @@ class MarconiNode:
     # Set LED colors in a thread-safe manner depending on the action taken by the code
     def set_led(self, led_type, color):
         """Thread-safe method to change LED colors."""
+        if led_type == "TX":
+            self.is_transmitting = (color == "red")
         target = self.tx_led if led_type == "TX" else self.rx_led
         canvas = self.tx_light if led_type == "TX" else self.rx_light
         self.root.after(0, lambda: canvas.itemconfig(target, fill=color))
@@ -415,6 +418,24 @@ class MarconiNode:
                 self.last_protocol = current_protocol
             samples = self.sdr.rx()
             
+            if self.is_transmitting:
+                # We are blasting RF. Ignore the incoming math so we don't 
+                # deafen our CPU trying to decode our own echo!
+                self.channel_busy = False
+                self.ethernet_decoder.receiving = False
+                self.ethernet_decoder.buffer = []
+                self.just_finished_tx = True 
+                continue
+            
+            if self.just_finished_tx:
+                # The exact millisecond TX finishes, destroy the hardware buffer
+                # so we don't accidentally process the tail-end of the echo!
+                self.just_finished_tx = False
+                try:
+                    self.sdr.rx_destroy_buffer()
+                except Exception:
+                    pass
+                continue # Skip to the next clean buffer
             # Subtracting the mean instantly removes the LO Leakage from the 
             # other SDR, dropping the noise floor back down to near-zero 
             # and completely eliminating the destructive phase beating!
