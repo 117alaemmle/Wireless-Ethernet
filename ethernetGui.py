@@ -21,7 +21,7 @@ def get_node_identity():
     # --- YOUR MAC ADDRESS DICTIONARY ---
     known_nodes = {
         "44:fa:66:57:b0:3a": "001",  # Windows 11 Laptop
-        "11:22:33:44:55:66": "002"   # e.g., Windows 10 Laptop
+        "ba:86:87:7d:26:29": "002"   # Windows 10 Laptop
     }
     
     # Return the mapped ID, or default to "003" if it's an unknown computer
