@@ -242,7 +242,7 @@ class MarconiNode:
 
             # Define the color palette
             self.history.tag_config("status", foreground="gray")
-            self.history.tag_config("received", foreground="blue", font=("TkDefaultFont", 10, "bold"))
+            self.history.tag_config("received", foreground="blue")
             self.history.tag_config("sniffed", foreground="purple")
             self.history.tag_config("error", foreground="red")
             
