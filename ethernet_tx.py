@@ -1,7 +1,7 @@
 import time
 import random
 import numpy as np
-import ethernet_protocol
+import ethernet_protocol, zlib
 
 class EthernetTransmitter:
     def __init__(self, sdr, samp_rate, unit_time, log_callback, led_callback, busy_check_callback):
@@ -42,8 +42,16 @@ class EthernetTransmitter:
             if not self.is_channel_busy():
                 break # We successfully claimed the channel! Break the loop and transmit.
             # If someone else started talking during our backoff, the loop repeats.
-            
-        packet = f"{target}{my_address}{msg}"
+        
+
+        # ========================================================
+        # ETHERNET FRAME CHECK SEQUENCE (FCS)
+        # Calculate the CRC-32 of the Address + Payload and append it
+        # ========================================================
+        packet_core = f"{target}{my_address}{msg}"
+        crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
+        packet = packet_core + crc32_hex
+
         
         if self.log:
             self.log(f"-> Ethernet TX to {target}: {msg}")

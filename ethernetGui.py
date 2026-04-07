@@ -1,6 +1,7 @@
 import os, time, random, threading, queue, uuid
 import tkinter as tk
 from tkinter import scrolledtext
+import zlib
 import numpy as np  #pip install numpy pyadi-iio
 import adi
 import marconiAudio
@@ -18,7 +19,7 @@ def get_node_identity():
     
     print(f"Hardware MAC Address Detected: {mac_hex}")
     
-    # --- YOUR MAC ADDRESS DICTIONARY ---
+    # --- MAC ADDRESS DICTIONARY ---
     known_nodes = {
         "44:fa:66:57:b0:3a": "001",  # Windows 11 Laptop
         "ba:86:87:7d:26:29": "002"   # Windows 10 Laptop
@@ -495,7 +496,7 @@ class MarconiNode:
                 
             # If either decoder finished assembling a packet, process it
             if packet_data:
-                self.parse_fixed_packet(packet_data)
+                self.parse_fixed_packet(packet_data, current_protocol)
 
                 # ==========================================
                 # THE FIX: FLUSH THE SDR HARDWARE BUFFER
@@ -508,19 +509,52 @@ class MarconiNode:
                 except Exception as e:
                     pass
 
-    def parse_fixed_packet(self, data):
-        """Standardized 3-3-Rest Parsing."""
+    def parse_fixed_packet(self, data, protocol):
+        """Standardized Parsing with Ethernet CRC logic (No ACKs)."""
         if len(data) >= (ADDR_LEN * 2):
             dest = data[:3]
             src = data[3:6]
-            msg = data[6:]
             
-            if dest == MY_ADDRESS:
-                self.log(f"*** FROM {src} ***: {msg}", tag="received")
+            # ----------------------------------------------------
+            # ETHERNET MODE: CRC LOGIC (Demonstration Mode)
+            # ----------------------------------------------------
+            if protocol == "Wireless Ethernet (CSMA/CA)":
+                if len(data) < 14: # 3 Dest + 3 Src + 8 CRC = 14 min
+                    self.log(f"?? Runt Ethernet Packet: {data}", "error")
+                    return
+                    
+                payload = data[6:-8]
+                received_crc = data[-8:]
+                
+                # Verify the 32-bit Frame Check Sequence
+                frame_to_check = f"{dest}{src}{payload}".encode()
+                calculated_crc = f"{zlib.crc32(frame_to_check) & 0xFFFFFFFF:08x}"
+                
+                if received_crc != calculated_crc:
+                    # Demo Mode: Explicitly show the user that the CRC caught a corrupted frame!
+                    self.log(f"[CRC FAILED] Hardware dropped corrupted frame from {src}: [{payload}]", "error")
+                    return # Drop the packet!
+                
+                # CRC Passed!
+                msg = payload
+                if dest == MY_ADDRESS:
+                    # Explicitly show the user that the math verified the data
+                    self.log(f"[CRC VERIFIED] Frame intact.", "status")
+                    self.log(f"*** FROM {src} ***: {msg}", "received")
+                else:
+                    self.log(f"[Sniffed] {src}->{dest}: {msg} (CRC Verified)", "sniffed")
+
+            # ----------------------------------------------------
+            # MARCONI / ALOHA MODE (No Checksums)
+            # ----------------------------------------------------
             else:
-                self.log(f"[Sniffed] {src}->{dest}: {msg}", tag="sniffed")
+                msg = data[6:]
+                if dest == MY_ADDRESS:
+                    self.log(f"*** FROM {src} ***: {msg}", "received")
+                else:
+                    self.log(f"[Sniffed] {src}->{dest}: {msg}", "sniffed")
         else:
-            self.log(f"?? Runt Packet: {data}", tag="error")
+            self.log(f"?? Runt Packet: {data}", "error")
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -3,3 +3,17 @@
 /__pycache__
 *.pyc
 *.pyc
+__pycache__/ethernet_rx.cpython-313.pyc
+__pycache__/ethernet_protocol.cpython-313.pyc
+__pycache__/ethernet_rx.cpython-313.pyc
+__pycache__/ethernet_tx.cpython-313.pyc
+__pycache__/marconi_audio.cpython-313.pyc
+__pycache__/marconi_rx.cpython-313.pyc
+__pycache__/marconiAudio.cpython-313.pyc
+__pycache__/teletype_protocol.cpython-313.pyc
+__pycache__/teletype_rx.cpython-313.pyc
+__pycache__/teletype_tx.cpython-313.pyc
+__pycache__/ethernet_protocol.cpython-313.pyc
+__pycache__/ethernet_rx.cpython-313.pyc
+__pycache__/ethernet_tx.cpython-313.pyc
+__pycache__/marconi_rx.cpython-313.pyc
