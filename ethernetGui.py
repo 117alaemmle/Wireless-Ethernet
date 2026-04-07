@@ -235,11 +235,19 @@ class MarconiNode:
 
 
 
-    def log(self, message):
+    def log(self, message, tag="status"):
         def append():
             ts = time.strftime("[%H:%M:%S]")
             self.history.configure(state='normal')
-            self.history.insert(tk.END, f"{ts} {message}\n")
+
+            # Define the color palette
+            self.history.tag_config("status", foreground="gray")
+            self.history.tag_config("received", foreground="blue", font=("TkDefaultFont", 10, "bold"))
+            self.history.tag_config("sniffed", foreground="purple")
+            self.history.tag_config("error", foreground="red")
+            
+            # Insert the text with the assigned tag
+            self.history.insert(tk.END, f"{ts} {message}\n", tag)
             self.history.configure(state='disabled')
             self.history.see(tk.END)
         self.root.after(0, append)
@@ -491,11 +499,11 @@ class MarconiNode:
             msg = data[6:]
             
             if dest == MY_ADDRESS:
-                self.log(f"*** FROM {src} ***: {msg}")
+                self.log(f"*** FROM {src} ***: {msg}", tag="received")
             else:
-                self.log(f"[Sniffed] {src}->{dest}: {msg}")
+                self.log(f"[Sniffed] {src}->{dest}: {msg}", tag="sniffed")
         else:
-            self.log(f"?? Runt Packet: {data}")
+            self.log(f"?? Runt Packet: {data}", tag="error")
 
 if __name__ == "__main__":
     root = tk.Tk()
