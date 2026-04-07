@@ -532,17 +532,18 @@ class MarconiNode:
                 
                 if received_crc != calculated_crc:
                     # Demo Mode: Explicitly show the user that the CRC caught a corrupted frame!
-                    self.log(f"[CRC FAILED] Hardware dropped corrupted frame from {src}: [{payload}]", "error")
+                    self.log(f"[CRC FAILED] Received: {received_crc.upper()} != Calculated: {calculated_crc.upper()}", "error")
+                    self.log(f"Hardware dropped corrupted frame from {src}: [{payload}]", "error")
                     return # Drop the packet!
                 
                 # CRC Passed!
                 msg = payload
                 if dest == MY_ADDRESS:
                     # Explicitly show the user that the math verified the data
-                    self.log(f"[CRC VERIFIED] Frame intact.", "status")
+                    self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
                     self.log(f"*** FROM {src} ***: {msg}", "received")
                 else:
-                    self.log(f"[Sniffed] {src}->{dest}: {msg} (CRC Verified)", "sniffed")
+                    self.log(f"[Sniffed] {src}->{dest}: {msg} (CRC Verified: {received_crc.upper()})", "sniffed")
 
             # ----------------------------------------------------
             # MARCONI / ALOHA MODE (No Checksums)
