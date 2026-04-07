@@ -9,7 +9,7 @@ import teletype_protocol # New module to handle teletype.
 import marconi_rx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
 import ethernet_tx, ethernet_rx
-
+#quick change for test
 
 # --- Configuration ---
 MY_ADDRESS = "001"
