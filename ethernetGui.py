@@ -38,6 +38,7 @@ SAMP_RATE = 1e6
 UNIT_TIME = 0.08 # 15 Words per minute, a common speed for radio operators in the early 1900s, including those on the Titanic. This speed allows for clear communication while still being efficient, especially given the heavy brass telegraph keys used at the time.
 #A professional Marconi operator in the early 1900s (like the operators on the Titanic) typically cruised at 15 to 20 WPM. Their speed was physically limited by the massive, heavy brass telegraph keys used to switch the high-voltage spark-gap equipment.
 #By World War II, operators using smaller keys or semi-automatic "bugs" (which used a vibrating pendulum to generate dots automatically) could comfortably send at 25 to 30 WPM, with elite operators pushing 40+ WPM.
+ETHERNET_UNIT_TIME = 0.002 #500 bits per second.
 #THRESHOLD = 580   # Using 'max' power logic for snappier detection
 #THRESHOLD = 500 
 
@@ -136,7 +137,7 @@ class MarconiNode:
         # --- Power Meter Setup ---
         ############################
 
-        # --- THE LIVE THRESHOLD FIX ---
+        # --- LIVE THRESHOLD FIX ---
         self.current_threshold = 100.0 # Instance variable replaces the global THRESHOLD
 
         meter_frame = tk.Frame(root)
@@ -221,7 +222,7 @@ class MarconiNode:
         # Initialize Decoders for decoding incoming messages
         self.marconi_decoder = marconi_rx.MarconiDecoder(UNIT_TIME, REVERSE_DICT)
         self.teletype_decoder = teletype_rx.TeletypeDecoder(SAMP_RATE)
-        self.ethernet_decoder = ethernet_rx.EthernetDecoder(SAMP_RATE, UNIT_TIME)
+        self.ethernet_decoder = ethernet_rx.EthernetDecoder(SAMP_RATE, ETHERNET_UNIT_TIME)
 
         # Initialize Transmitters
         self.teletype_transmitter = teletype_tx.TeletypeTransmitter(
