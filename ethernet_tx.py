@@ -28,8 +28,7 @@ class EthernetTransmitter:
         
         if self.log:
             self.log(f"-> Ethernet TX to {target}: {msg}")
-        if self.set_led:
-            self.set_led("TX", "red")
+
             
         # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.
         rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
@@ -67,15 +66,27 @@ class EthernetTransmitter:
         
 
               
-        # 2. Stream to Hardware in safe chunks
-        chunk_size = 131072
-        for i in range(0, len(rf_wave), chunk_size):
-            chunk = rf_wave[i:i+chunk_size]
-            if len(chunk) < chunk_size:
-                pad = np.zeros(chunk_size - len(chunk), dtype=np.complex128)
-                chunk = np.concatenate((chunk, pad))
-            self.sdr.tx(chunk)
+# 4. INSTANT TRANSMISSION (Gapless One-Shot!)
+        if self.set_led:
+            self.set_led("TX", "red")
             
+        # ========================================================
+        # THE FIX: GAPLESS TRANSMISSION
+        # Destroy any old buffers, resize the hardware pipe to the EXACT 
+        # length of our packet, and push the whole thing at once. 
+        # No more Python for-loops, no more Windows 10 USB micro-stutters!
+        # ========================================================
+        try:
+            self.sdr.tx_destroy_buffer()
+        except Exception:
+            pass
+            
+        # Dynamically allocate the SDR buffer to swallow the entire array
+        self.sdr.tx_buffer_size = len(rf_wave)
+        
+        # Fire it in one solid, uninterrupted beam
+        self.sdr.tx(rf_wave)
+        
         self.sdr.tx_destroy_buffer()
         
         if self.set_led:
