@@ -35,7 +35,7 @@ class EthernetTransmitter:
             # 2. Collision Avoidance (The Backoff)
             # The channel just cleared! Wait a random amount of time to ensure 
             # we don't accidentally transmit at the exact same time as another waiting node.
-            backoff_time = random.uniform(0.1, 1.5)
+            backoff_time = random.uniform(0.7, 1.5)
             time.sleep(backoff_time)
             
             # 3. Final Check: Is the channel STILL clear?
