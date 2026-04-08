@@ -229,7 +229,7 @@ class MarconiNode:
             self.sdr, SAMP_RATE, self.log, self.set_led
         )
         self.ethernet_transmitter = ethernet_tx.EthernetTransmitter(
-            self.sdr, SAMP_RATE, UNIT_TIME, self.log, self.set_led, lambda: self.channel_busy
+            self.sdr, SAMP_RATE, ETHERNET_UNIT_TIME, self.log, self.set_led, lambda: self.channel_busy
         )
 
         # --- Teletype (FSK) Receiver State ---
