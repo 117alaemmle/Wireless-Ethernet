@@ -512,6 +512,7 @@ class MarconiNode:
 
     def parse_fixed_packet(self, data, protocol):
         """Standardized Parsing with Ethernet CRC logic (No ACKs)."""
+        data = data.rstrip('\x00')
         if len(data) >= (ADDR_LEN * 2):
             dest = data[:3]
             src = data[3:6]
