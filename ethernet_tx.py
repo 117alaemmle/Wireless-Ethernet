@@ -33,7 +33,11 @@ class EthernetTransmitter:
             
         # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.
         rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
-
+       
+        # Append 0.5 seconds of pure silence to the end of the array. 
+        # This pushes the CRC out of the hardware queue before the buffer is destroyed!
+        flush_pad = np.zeros(int(self.samp_rate * 0.5), dtype=np.complex128)
+        rf_wave = np.concatenate((rf_wave, flush_pad))
 
         # --- CSMA: Carrier Sense Multiple Access ---
         # "Polite" Access: Wait until the channel is clear before starting.
