@@ -17,6 +17,24 @@ class EthernetTransmitter:
     def transmit(self, target, my_address, msg):
         """Simulates 10BASE5-style Ethernet with CSMA Listen-Before-Talk."""
         
+        # ========================================================
+        # ETHERNET FRAME CHECK SEQUENCE (FCS)
+        # Calculate the CRC-32 of the Address + Payload and append it
+        # ========================================================
+        packet_core = f"{target}{my_address}{msg}"
+        crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
+        packet = packet_core + crc32_hex
+
+        
+        if self.log:
+            self.log(f"-> Ethernet TX to {target}: {msg}")
+        if self.set_led:
+            self.set_led("TX", "red")
+            
+        # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.
+        rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
+
+
         # --- CSMA: Carrier Sense Multiple Access ---
         # "Polite" Access: Wait until the channel is clear before starting.
         while True:
@@ -44,23 +62,7 @@ class EthernetTransmitter:
             # If someone else started talking during our backoff, the loop repeats.
         
 
-        # ========================================================
-        # ETHERNET FRAME CHECK SEQUENCE (FCS)
-        # Calculate the CRC-32 of the Address + Payload and append it
-        # ========================================================
-        packet_core = f"{target}{my_address}{msg}"
-        crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
-        packet = packet_core + crc32_hex
-
-        
-        if self.log:
-            self.log(f"-> Ethernet TX to {target}: {msg}")
-        if self.set_led:
-            self.set_led("TX", "red")
-            
-        # 1. Generate the waveform
-        rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
-        
+              
         # 2. Stream to Hardware in safe chunks
         chunk_size = 131072
         for i in range(0, len(rf_wave), chunk_size):
