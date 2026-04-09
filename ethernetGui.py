@@ -116,10 +116,6 @@ class MarconiNode:
         # This stores (target, message) tuples
         self.tx_queue = queue.Queue()
 
-        # --- EFTP THREAD COMMUNICATION ---
-        self.ack_received_event = threading.Event()
-        self.expected_ack_seq = -1
-
         ###########################################
         # --- Indicator Lights Setup ---
         ###########################################
@@ -338,71 +334,7 @@ class MarconiNode:
                 elif current_protocol == "Teletype (FSK)":
                     self.teletype_transmitter.transmit(target, MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
-                    MTU_DATA_SIZE = 81
-                    chunks = [msg[i:i+MTU_DATA_SIZE] for i in range(0, len(msg), MTU_DATA_SIZE)]
-                    
-                    seq_num = 0
-                    max_retries = 5
-                    transfer_failed = False
-                    
-                    # ------------------------------------------
-                    # Phase 1: Transmit Data Chunks
-                    # ------------------------------------------
-                    for chunk_idx, chunk_text in enumerate(chunks):
-                        payload = ethernet_protocol.build_eftp_payload('D', seq_num, chunk_text)
-                        
-                        success = False
-                        for attempt in range(max_retries):
-                            if len(chunks) > 1:
-                                self.log(f"-> Sending [Part {chunk_idx+1}/{len(chunks)}] (Attempt {attempt+1})", "status")
-                            else:
-                                self.log(f"-> Sending Data (Attempt {attempt+1})", "status")
-                                
-                            self.expected_ack_seq = seq_num
-                            self.ack_received_event.clear()
-                            
-                            self.ethernet_transmitter.transmit(target, MY_ADDRESS, payload)
-                            
-                            if self.ack_received_event.wait(timeout=2.5):
-                                success = True
-                                break 
-                            else:
-                                self.log(f"XX ACK {seq_num} Timeout. Retransmitting...", "error")
-                        
-                        if not success:
-                            self.log(f"XX EFTP Transfer Failed: Target {target} unreachable.", "error")
-                            transfer_failed = True
-                            break 
-                            
-                        seq_num += 1
-
-                    if transfer_failed:
-                        continue
-
-                    # ------------------------------------------
-                    # Phase 2: Transmit End Packet
-                    # ------------------------------------------
-                    end_payload = ethernet_protocol.build_eftp_payload('E', seq_num)
-                    end_success = False
-                    
-                    for attempt in range(max_retries):
-                        self.log(f"-> Sending END packet (Attempt {attempt+1})", "status")
-                        
-                        self.expected_ack_seq = seq_num
-                        self.ack_received_event.clear()
-                        
-                        self.ethernet_transmitter.transmit(target, MY_ADDRESS, end_payload)
-                        
-                        if self.ack_received_event.wait(timeout=2.5):
-                            end_success = True
-                            break
-                        else:
-                            self.log(f"XX Endreply {seq_num} Timeout. Retransmitting...", "error")
-                            
-                    if end_success:
-                        self.log(f"++ EFTP Transfer Complete to {target} ++", "received")
-                    else:
-                        self.log(f"XX EFTP Endreply Failed. Transfer status unknown.", "error")
+                    self.ethernet_transmitter.transmit(target, MY_ADDRESS, msg)
 
                 self.tx_queue.task_done()
                 #Increase delay time from 15 to 35 tto ensure enqueued messages to not get muddled.
