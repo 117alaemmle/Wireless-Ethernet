@@ -28,7 +28,8 @@ class EthernetTransmitter:
         
         if self.log:
             self.log(f"-> Ethernet TX to {target}: {msg}")
-
+        if self.set_led:
+            self.set_led("TX", "red")
             
         # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.
         rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
