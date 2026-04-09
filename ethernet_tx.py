@@ -67,6 +67,10 @@ class EthernetTransmitter:
             pass
             
         MAX_BUFFER = 2000000 # ~16 MB (Safe for the Pluto's CMA limits)
+        tx_duration = len(rf_wave) / self.samp_rate
+        
+        # --- THE SMART STOPWATCH ---
+        start_tx_time = time.time()
         
         if len(rf_wave) <= MAX_BUFFER:
             # Fits in memory! Send as a Gapless One-Shot.
@@ -74,7 +78,6 @@ class EthernetTransmitter:
             self.sdr.tx(rf_wave)
         else:
             # Too large for memory! Spoon-feed it in massive "Jumbo Chunks".
-            # Because each chunk takes 2 seconds to play, Windows 10 will never stutter!
             self.sdr.tx_buffer_size = MAX_BUFFER
             for i in range(0, len(rf_wave), MAX_BUFFER):
                 chunk = rf_wave[i:i+MAX_BUFFER]
@@ -83,9 +86,13 @@ class EthernetTransmitter:
                     chunk = np.concatenate((chunk, pad))
                 self.sdr.tx(chunk)
         
-        # Hold the thread open while the radio finishes singing
-        tx_duration = len(rf_wave) / self.samp_rate
-        time.sleep(tx_duration)
+        # --- THE FIX: CALCULATE REMAINING TIME ---
+        elapsed = time.time() - start_tx_time
+        remaining_time = tx_duration - elapsed
+        
+        # Only sleep if the hardware queue still needs time to finish playing!
+        if remaining_time > 0:
+            time.sleep(remaining_time)
         
         self.sdr.tx_destroy_buffer()
         
