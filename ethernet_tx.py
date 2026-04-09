@@ -28,8 +28,8 @@ class EthernetTransmitter:
         
         if self.log:
             self.log(f"-> Ethernet TX to {target}: {msg}")
-        if self.set_led:
-            self.set_led("TX", "red")
+        #if self.set_led:
+        #    self.set_led("TX", "red")
             
         # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.
         rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
@@ -87,7 +87,7 @@ class EthernetTransmitter:
         
         # Fire it in one solid, uninterrupted beam
         self.sdr.tx(rf_wave)
-        
+
         # Because we gave the SDR the whole file at once, Python doesn't block.
         # We must manually wait for the radio to physically finish playing!
         # ========================================================
