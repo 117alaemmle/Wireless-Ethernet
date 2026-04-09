@@ -15,31 +15,21 @@ class EthernetTransmitter:
         self.is_channel_busy = busy_check_callback 
 
     def transmit(self, target, my_address, msg):
-        """Simulates 10BASE5-style Ethernet with CSMA Listen-Before-Talk."""
+        """Simulates 'Dumb' OSI Layer 2 Ethernet Hardware. Best-effort delivery only."""
         
-        # ========================================================
-        # ETHERNET FRAME CHECK SEQUENCE (FCS)
-        # Calculate the CRC-32 of the Address + Payload and append it
-        # ========================================================
+        # 1. Build the Packet and Hardware CRC
         packet_core = f"{target}{my_address}{msg}"
         crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
-        packet = packet_core + crc32_hex
-
-        
-        if self.log:
-            self.log(f"-> Ethernet TX to {target}: {msg}")
-        #if self.set_led:
-        #    self.set_led("TX", "red")
+        packet = packet_core + crc32_hex 
             
-        # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.
+        # 2. Pre-Compute the Waveform 
         rf_wave = ethernet_protocol.generate_manchester_signal(packet, self.samp_rate, self.unit_time)
-       
-       # --- THE DMA FLUSH PAD & 64-BIT COMPRESSION ---
-        # Append silence and downcast to 64-bit to save 50% of the SDR's RAM!
+        
+        # 3. Add the DMA Flush Pad and compress to 64-bit
         flush_pad = np.zeros(int(self.samp_rate * 0.5), dtype=np.complex64)
         rf_wave = np.concatenate((np.complex64(rf_wave), flush_pad))
 
-        # --- CSMA/CA: Carrier Sense & Collision Avoidance ---
+        # --- CSMA/CA: Listen Before Talk ---
         while True:
             continuous_silence = 0.0
             while continuous_silence < 0.5:
@@ -53,10 +43,10 @@ class EthernetTransmitter:
             time.sleep(backoff_time)
             
             if not self.is_channel_busy():
-                break
+                break # Channel claimed!
 
         # ========================================================
-        # INSTANT TRANSMISSION (Jumbo Chunking!)
+        # INSTANT TRANSMISSION (Gapless One-Shot)
         # ========================================================
         if self.set_led:
             self.set_led("TX", "red")
@@ -66,31 +56,18 @@ class EthernetTransmitter:
         except Exception:
             pass
             
-        MAX_BUFFER = 2000000 # ~16 MB (Safe for the Pluto's CMA limits)
+        # Hand the exact array size to the hardware
+        self.sdr.tx_buffer_size = len(rf_wave)
         tx_duration = len(rf_wave) / self.samp_rate
         
-        # --- THE SMART STOPWATCH ---
         start_tx_time = time.time()
         
-        if len(rf_wave) <= MAX_BUFFER:
-            # Fits in memory! Send as a Gapless One-Shot.
-            self.sdr.tx_buffer_size = len(rf_wave)
-            self.sdr.tx(rf_wave)
-        else:
-            # Too large for memory! Spoon-feed it in massive "Jumbo Chunks".
-            self.sdr.tx_buffer_size = MAX_BUFFER
-            for i in range(0, len(rf_wave), MAX_BUFFER):
-                chunk = rf_wave[i:i+MAX_BUFFER]
-                if len(chunk) < MAX_BUFFER:
-                    pad = np.zeros(MAX_BUFFER - len(chunk), dtype=np.complex64)
-                    chunk = np.concatenate((chunk, pad))
-                self.sdr.tx(chunk)
+        # Fire the buffer (This blocks Python while playing)
+        self.sdr.tx(rf_wave)
         
-        # --- THE FIX: CALCULATE REMAINING TIME ---
+        # --- THE SMART STOPWATCH ---
         elapsed = time.time() - start_tx_time
         remaining_time = tx_duration - elapsed
-        
-        # Only sleep if the hardware queue still needs time to finish playing!
         if remaining_time > 0:
             time.sleep(remaining_time)
         
