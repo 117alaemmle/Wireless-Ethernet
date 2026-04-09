@@ -88,6 +88,12 @@ class EthernetTransmitter:
         # Fire it in one solid, uninterrupted beam
         self.sdr.tx(rf_wave)
         
+        # Because we gave the SDR the whole file at once, Python doesn't block.
+        # We must manually wait for the radio to physically finish playing!
+        # ========================================================
+        tx_duration = len(rf_wave) / self.samp_rate
+        time.sleep(tx_duration)
+
         self.sdr.tx_destroy_buffer()
         
         if self.set_led:
