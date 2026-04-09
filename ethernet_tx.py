@@ -17,6 +17,13 @@ class EthernetTransmitter:
     def transmit(self, target, my_address, msg):
         """Simulates 'Dumb' OSI Layer 2 Ethernet Hardware. Best-effort delivery only."""
         
+        # Standard Ethernet is 64 bytes minimum. 
+        # Your overhead is 14 bytes: target(3) + src(3) + crc32(8).
+        # Therefore, the msg payload must be at least 50 bytes.
+        MIN_PAYLOAD = 50
+        if len(msg) < MIN_PAYLOAD:
+            msg = msg.ljust(MIN_PAYLOAD, '\x00')
+        
         # 1. Build the Packet and Hardware CRC
         packet_core = f"{target}{my_address}{msg}"
         crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
