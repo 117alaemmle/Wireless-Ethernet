@@ -22,7 +22,7 @@ def get_node_identity():
     # --- MAC ADDRESS DICTIONARY ---
     known_nodes = {
         "44:fa:66:57:b0:3a": "001",  # Windows 11 Laptop
-        "ba:86:87:7d:26:29": "002"   # Windows 10 Laptop
+        "58:cd:c9:11:b5:94": "002"   # Windows 10 Laptop
     }
     
     # Return the mapped ID, or default to "003" if it's an unknown computer
@@ -102,9 +102,9 @@ class MarconiNode:
             self.sdr.sample_rate = int(SAMP_RATE)
             self.sdr.tx_lo = int(FREQ)
             self.sdr.rx_lo = int(FREQ)
-            self.sdr.tx_hardwaregain_chan0 = -20 #-10DB for direct wired connection
+            self.sdr.tx_hardwaregain_chan0 = -10 #-10DB for direct wired connection
             #self.sdr.tx_hardwaregain_chan0 = 0 #0DB for antenna use, gives it a boost to be able to hear anything at all.
-            self.sdr.rx_hardwaregain_chan0 = 25 #25DB gain for direct connection.
+            self.sdr.rx_hardwaregain_chan0 = -20 #25DB gain for direct connection.
             #self.sdr.rx_hardwaregain_chan0 = 55 #bigger gain for antennas.
             self.sdr.rx_buffer_size = 500 # Increasing buffer size to prevent dropping samples
             #self.sdr.rx_buffer_size = 32768 #We need to change buffer size depending on the type of protocol. Marconi requires precise timing, smaller buffer size.
