@@ -465,9 +465,11 @@ class MarconiNode:
             # Subtracting the mean instantly removes the LO Leakage from the 
             # other SDR, dropping the noise floor back down to near-zero 
             # and completely eliminating the destructive phase beating!
-            dc_blocked = samples - np.mean(samples)
+            #dc_blocked = samples - np.mean(samples)
+            filtered_samples = np.diff(samples)
             
-            pwr = np.max(np.abs(dc_blocked))
+            pwr = np.percentile(np.abs(filtered_samples), 95)
+            #pwr = np.max(np.abs(dc_blocked))
             #Evaluate whether the channel is busy by comparing to the current slider value.
             self.channel_busy = (pwr > self.current_threshold)
             
