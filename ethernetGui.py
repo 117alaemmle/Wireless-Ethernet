@@ -244,7 +244,6 @@ class MarconiNode:
         self.entry.bind("<Return>", self.on_send)
         
         self.log(f"*** Node {MY_ADDRESS} Listening (Promiscuous Mode) ***")
-#        threading.Thread(target=self.receiver_loop, daemon=True).start()
 
 
         # Start background threads
@@ -493,7 +492,7 @@ class MarconiNode:
                 packet_data = self.teletype_decoder.process(samples, self.channel_busy)
             elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                 # Ethernet uses raw samples to calculate the Manchester transitions
-                packet_data = self.ethernet_decoder.process(samples, self.channel_busy)
+                packet_data = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
                 
             # If either decoder finished assembling a packet, process it
             if packet_data:

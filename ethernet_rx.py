@@ -9,7 +9,7 @@ class EthernetDecoder:
         self.last_busy_time = 0
         self.receiving = False
 
-    def process(self, samples, channel_busy):
+    def process(self, samples, channel_busy, current_threshold=100):
         """Accumulates the OOK packet and decodes the Manchester bits."""
         if channel_busy:
             self.receiving = True
@@ -27,10 +27,11 @@ class EthernetDecoder:
                     if len(self.buffer) > 0:
                         full_waveform = np.concatenate(self.buffer)
                         self.buffer = []
-                        return self.decode_packet(full_waveform)
+                        # Pass the threshold to the decoder
+                        return self.decode_packet(full_waveform, current_threshold)
             return None
             
-    def decode_packet(self, waveform):
+    def decode_packet(self, waveform, current_threshold):
         """Slices the waveform into chips and reassembles the ASCII bytes."""
        # 1. Shift the 100 kHz carrier down to 0 Hz.
         # This pushes the other radio's LO Leakage down to -100 kHz.
@@ -52,8 +53,9 @@ class EthernetDecoder:
         # 4. ROBUST THRESHOLDING
         # Use the 95th percentile to completely ignore massive, split-second static pops
         max_pwr = np.percentile(envelope, 95)
-        if max_pwr < 100: 
+        if max_pwr < current_threshold: 
             return None 
+        
         threshold = max_pwr * 0.5
         
         # 5. Find the true Sync Bit
