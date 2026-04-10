@@ -102,7 +102,7 @@ class MarconiNode:
             self.sdr.sample_rate = int(SAMP_RATE)
             self.sdr.tx_lo = int(FREQ)
             self.sdr.rx_lo = int(FREQ)
-            self.sdr.tx_hardwaregain_chan0 = -10 #-10DB for direct wired connection
+            self.sdr.tx_hardwaregain_chan0 = -20 #-10DB for direct wired connection
             #self.sdr.tx_hardwaregain_chan0 = 0 #0DB for antenna use, gives it a boost to be able to hear anything at all.
             self.sdr.rx_hardwaregain_chan0 = 25 #25DB gain for direct connection.
             #self.sdr.rx_hardwaregain_chan0 = 55 #bigger gain for antennas.
@@ -138,7 +138,7 @@ class MarconiNode:
         ############################
 
         # --- LIVE THRESHOLD FIX ---
-        self.current_threshold = 100.0 # Instance variable replaces the global THRESHOLD
+        self.current_threshold = 200.0 # Instance variable replaces the global THRESHOLD
 
         meter_frame = tk.Frame(root)
         meter_frame.pack(pady=5, fill="x", padx=20)
