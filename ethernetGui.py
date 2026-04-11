@@ -616,6 +616,49 @@ class MarconiNode:
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
                             self.log(f"[EFTP] ACK {seq_hex} received from {src}! Delivery confirmed.", "status")
                             self.unacked_packet = None 
+                    
+                    # ====================================================
+                    # EFTP: END OF FILE HANDSHAKE
+                    # ====================================================
+                    elif ptype == "EN":
+                        self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
+                        
+                        port = msg[0]
+                        payload_data = msg[1:]
+                        
+                        if port == "F":
+                            try:
+                                # Extract the filename from the header (e.g., "frankenstein.txt|")
+                                filename = payload_data.split('|')[0]
+                                
+                                if filename in self.file_buffers:
+                                    # Save the completed buffer directly to the folder where the script is running!
+                                    save_path = os.path.join(os.getcwd(), filename)
+                                    with open(save_path, 'w', encoding='utf-8') as f:
+                                        f.write(self.file_buffers[filename])
+                                        
+                                    self.log(f"[EFTP] SUCCESS: {filename} fully reassembled and saved to disk!", "received")
+                                    
+                                    # Clear the memory buffer so it's fresh for the next transfer
+                                    del self.file_buffers[filename]
+                                else:
+                                    self.log(f"[EFTP] Received END for {filename}, but no data was buffered.", "error")
+                                    
+                            except Exception as e:
+                                self.log(f"[EFTP] Error saving file to disk: {e}", "error")
+                                
+                        # ALWAYS reply with the ENDREPLY packet to satisfy the sender's Stop-and-Wait lock!
+                        self.log(f"[EFTP] Auto-replying with ENDREPLY for {seq_hex}...", "status")
+                        self.tx_queue.put((src, "", "ER", seq_hex, 0))
+
+                    # ====================================================
+                    # EFTP: RECEIVING THE ENDREPLY
+                    # ====================================================
+                    elif ptype == "ER":
+                        # If we get the ENDREPLY, the file transfer is officially over!
+                        if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
+                            self.log(f"[EFTP] ENDREPLY {seq_hex} received from {src}! File transfer successfully concluded.", "status")
+                            self.unacked_packet = None # Release the daemon lock!
                             
                             
                 else:
@@ -630,6 +673,7 @@ class MarconiNode:
                     self.log(f"*** FROM {src} ***: {msg}", "received")
                 else:
                     self.log(f"[Sniffed] {src}->{dest}: {msg}", "sniffed")
+
         else:
             self.log(f"?? Runt Packet: {data}", "error")
 
