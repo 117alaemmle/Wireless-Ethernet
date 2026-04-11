@@ -214,6 +214,17 @@ class MarconiNode:
             self.history.see(tk.END)
         self.root.after(0, append)
 
+    def append_live_text(self, text):
+        """Appends streaming text to the history window in real-time."""
+        self.history.configure(state='normal')
+        
+        # Use a distinct color (like dark orange) so you can visually distinguish 
+        # the live-streamed raw data from the final CRC-verified logs!
+        self.history.tag_config("live", foreground="dark orange")
+        
+        self.history.insert(tk.END, text, "live")
+        self.history.configure(state='disabled')
+        self.history.see(tk.END)
 
     # Set LED colors in a thread-safe manner depending on the action taken by the code
     def set_led(self, led_type, color):
