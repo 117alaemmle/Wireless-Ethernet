@@ -123,7 +123,7 @@ class MarconiNode:
         self.protocol_dropdown = ttk.Combobox(
             protocol_frame, 
             textvariable=self.protocol_var, 
-            values=["Marconi (OOK)", "Teletype (FSK)", "ALOHAnet (OOK)", "Wireless Ethernet (CSMA/CA)"],
+            values=["Marconi (OOK)", "Wireless Ethernet (CSMA/CA)"], #"Teletype (FSK)", "ALOHAnet (OOK)", 
             state="readonly"
         )
         self.protocol_dropdown.pack(padx=10, pady=5, side="left")
@@ -139,6 +139,10 @@ class MarconiNode:
         self.m_in_pulse = False
         self.m_p_start = time.time()
         self.m_s_start = time.time()
+        self.m_live_buffer = ""
+        self.m_header_printed = False
+
+        # Initialize Decoders for decoding incoming messages...
 
         # Initialize Decoders for decoding incoming messages
         self.marconi_decoder = marconi_rx.MarconiDecoder(config.UNIT_TIME)
@@ -248,6 +252,46 @@ class MarconiNode:
             
         self.root.after(0, draw)
 
+    def handle_marconi_live(self, text):
+        """Buffers the MAC addresses, prints the header, then streams the payload."""
+        self.m_live_buffer += text
+        self.history.configure(state='normal')
+        
+        if not self.m_header_printed:
+            # Wait until we have all 6 MAC address characters
+            if len(self.m_live_buffer) >= 6:
+                dest = self.m_live_buffer[:3]
+                src = self.m_live_buffer[3:6]
+                
+                # Assign colors based on promiscuous sniffing vs direct target
+                tag = "received" if dest == config.MY_ADDRESS else "sniffed"
+                
+                ts = time.strftime("[%H:%M:%S]")
+                # Build the beautiful formatted header!
+                header = f"{ts} *** FROM {src} **** (TO: {dest}) ***: "
+                self.history.insert(tk.END, header, tag)
+                
+                # Print any leftover payload characters that arrived with the 6th character
+                payload = self.m_live_buffer[6:]
+                if payload:
+                    self.history.insert(tk.END, payload, tag)
+                    
+                self.m_header_printed = True
+        else:
+            # Header is already printed. Just stream the new text!
+            dest = self.m_live_buffer[:3]
+            tag = "received" if dest == config.MY_ADDRESS else "sniffed"
+            self.history.insert(tk.END, text, tag)
+            
+        self.history.configure(state='disabled')
+        self.history.see(tk.END)
+
+    def finalize_live_line(self):
+        """Appends a newline when a transmission finishes so the next log starts clean."""
+        self.history.configure(state='normal')
+        self.history.insert(tk.END, "\n")
+        self.history.configure(state='disabled')
+
 
     def on_send(self, event):
         msg = self.entry.get().strip()
@@ -356,28 +400,41 @@ class MarconiNode:
                 self.last_rx_state = self.channel_busy
                 self.set_led("RX", "green" if self.channel_busy else "gray")
 
-            # Route to the appropriate external decoder object
+           # Route to the appropriate external decoder object
             current_protocol = self.protocol_var.get()
             packet_data = None
             
             if current_protocol == "Marconi (OOK)":
-                packet_data = self.marconi_decoder.process(self.channel_busy)
+                new_m_text, packet_done = self.marconi_decoder.process(self.channel_busy)
+                
+                if new_m_text:
+                    self.root.after(0, lambda t=new_m_text: self.handle_marconi_live(t))
+                    
+                if packet_done:
+                    # If packet finished before 6 characters arrived, it's a runt!
+                    if not self.m_header_printed and len(self.m_live_buffer) > 0:
+                        self.root.after(0, lambda: self.log(f"?? Runt Marconi Packet: {self.m_live_buffer}", "error"))
+                    elif self.m_header_printed:
+                        # Lock in the line by dropping a \n character
+                        self.root.after(0, self.finalize_live_line)
+                        
+                    # Reset the GUI state for the next message
+                    self.m_live_buffer = ""
+                    self.m_header_printed = False
+
             elif current_protocol == "Teletype (FSK)":
                 packet_data = self.teletype_decoder.process(samples, self.channel_busy)
             elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                 # Ethernet uses raw samples to calculate the Manchester transitions
                 packet_data = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
                 
-            # If either decoder finished assembling a packet, process it
-            if packet_data:
+            # If either Ethernet or Teletype finished assembling a packet, process it
+            if packet_data and current_protocol in ["Wireless Ethernet (CSMA/CA)", "Teletype (FSK)"]:
                 self.parse_fixed_packet(packet_data, current_protocol)
 
                 # ==========================================
-                # THE FIX: FLUSH THE SDR HARDWARE BUFFER
+                # FLUSH THE SDR HARDWARE BUFFER
                 # ==========================================
-                # The Teletype DSP math freezes this thread for ~1 second. 
-                # We must destroy the hardware buffer so the SDR doesn't 
-                # feed us stale static for the start of the next packet!
                 try:
                     self.sdr.rx_destroy_buffer()
                 except Exception as e:
