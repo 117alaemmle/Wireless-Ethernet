@@ -439,7 +439,7 @@ class MarconiNode:
                     self.sdr.rx_buffer_size = 500
                 # Ethernet/Teletype need giant buffers so no array data is dropped
                 else:
-                    self.sdr.rx_buffer_size = 131072
+                    self.sdr.rx_buffer_size = 1048576
                     
                 self.last_protocol = current_protocol
             samples = self.sdr.rx()
