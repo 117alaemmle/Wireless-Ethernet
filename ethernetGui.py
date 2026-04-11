@@ -300,7 +300,7 @@ class MarconiNode:
         # Pull the target directly from the dropdown menu's saved state
         target = self.target_var.get()
         
-        self.tx_queue.put((target, msg), "DT")
+        self.tx_queue.put((target, msg, "DT"))
         self.log(f"[Queued] -> {target}: {msg}")
 
     def tx_daemon(self):
