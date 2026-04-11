@@ -32,9 +32,11 @@ class MarconiNode:
         except Exception as e:
             print(f"Hardware Error: {e}")
             
-        # --- THE QUEUE ---
-        # This stores (target, message) tuples
+        # --- THE QUEUES ---
+        # Main data queue for user messages and file chunks
         self.tx_queue = queue.Queue()
+        # Express queue for ACKs and ENDREPLYs to bypass the lock
+        self.ack_queue = queue.Queue()
 
         ###########################################
         # --- Indicator Lights Setup ---
@@ -353,9 +355,18 @@ class MarconiNode:
     def tx_daemon(self):
             while True:
                 # ====================================================
-                # EFTP STOP-AND-WAIT LOCK & TIMEOUT MANAGER
+                # 1. EXPRESS LANE: Process ACKs instantly!
                 # ====================================================
-                while self.unacked_packet is not None:
+                while not self.ack_queue.empty():
+                    ack_target, ack_msg, ack_ptype, ack_seq = self.ack_queue.get()
+                    # Fire control packets immediately, completely ignoring the lock!
+                    self.ethernet_transmitter.transmit(ack_target, config.MY_ADDRESS, ack_msg, packet_type=ack_ptype, seq_hex=ack_seq)
+                    self.ack_queue.task_done()
+
+                # ====================================================
+                # 2. EFTP STOP-AND-WAIT LOCK & TIMEOUT MANAGER
+                # ====================================================
+                if self.unacked_packet is not None:
                     elapsed_time = time.time() - self.unacked_packet["time"]
                     
                     if elapsed_time > 10.0:
@@ -367,17 +378,22 @@ class MarconiNode:
                         ptype = self.unacked_packet["ptype"]
                         
                         self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
-                        
-                        # Retransmit directly from the daemon! No queue-jumping needed.
                         self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
-                        
-                        # Reset the stopwatch so it waits another 10s before trying again
                         self.unacked_packet["time"] = time.time() 
                         
                     time.sleep(0.1)
+                    continue # Loop back to the top! Do not pull new main data!
 
-                # Unpack all 5 variables
-                target, msg, ptype, seq_hex, retries = self.tx_queue.get()
+                # ====================================================
+                # 3. NORMAL QUEUE PROCESSING
+                # ====================================================
+                try:
+                    # Use a 0.1s timeout so the loop doesn't freeze here forever.
+                    # This guarantees the daemon checks the ack_queue 10 times a second!
+                    target, msg, ptype, seq_hex, retries = self.tx_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                    
                 current_protocol = self.protocol_var.get()
                 
                 if current_protocol == "Marconi (OOK)":
@@ -386,7 +402,6 @@ class MarconiNode:
                     self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                     
-                    # THE FIX: Generate a Sequence Number for BOTH Data and End packets!
                     if ptype in ["DT", "EN"] and seq_hex is None:
                         seq_int = self.tx_seq_nums.get(target, 0)
                         seq_hex = f"{seq_int:04x}"
@@ -394,7 +409,6 @@ class MarconiNode:
 
                     self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
                     
-                    # THE FIX: Track BOTH Data and End packets for timeouts!
                     if ptype in ["DT", "EN"]:
                         self.unacked_packet = {
                             "target": target, 
@@ -402,7 +416,7 @@ class MarconiNode:
                             "time": time.time(), 
                             "retries": retries,
                             "seq_hex": seq_hex,
-                            "ptype": ptype # Track the type so we can resend EN packets properly!
+                            "ptype": ptype 
                         }
 
                 self.tx_queue.task_done()
@@ -627,7 +641,7 @@ class MarconiNode:
                             
                         # ALWAYS auto-reply with an ACK
                         self.log(f"[EFTP] Auto-replying with ACK for {seq_hex}...", "status")
-                        self.tx_queue.put((src, "", "AK", seq_hex, 0))
+                        self.ack_queue.put((src, "", "AK", seq_hex))
                         
                     elif ptype == "AK":
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
@@ -666,7 +680,7 @@ class MarconiNode:
                                 
                         # ALWAYS reply with the ENDREPLY packet to satisfy the sender's Stop-and-Wait lock!
                         self.log(f"[EFTP] Auto-replying with ENDREPLY for {seq_hex}...", "status")
-                        self.tx_queue.put((src, "", "ER", seq_hex, 0))
+                        self.ack_queue.put((src, "", "ER", seq_hex))
 
                     # ====================================================
                     # EFTP: RECEIVING THE ENDREPLY
