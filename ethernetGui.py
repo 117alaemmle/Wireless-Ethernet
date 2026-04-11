@@ -385,7 +385,7 @@ class MarconiNode:
                         
                         # THE FIX: Reset the stopwatch and generate a NEW random timeout!
                         self.unacked_packet["time"] = time.time() 
-                        self.unacked_packet["target_timeout"] = random.uniform(7.0, 12.0)
+                        self.unacked_packet["target_timeout"] = random.uniform(config.EFTP_TIMEOUT_MIN, config.EFTP_TIMEOUT_MAX)
                         
                     time.sleep(0.1)
                     continue # Loop back to the top! Do not pull new main data!
@@ -423,7 +423,7 @@ class MarconiNode:
                             "retries": retries,
                             "seq_hex": seq_hex,
                             "ptype": ptype, 
-                            "target_timeout": random.uniform(7.0 , 12.0) #Assign a random timeout for the very first attempt
+                            "target_timeout": random.uniform(config.EFTP_TIMEOUT_MIN, config.EFTP_TIMEOUT_MAX) #Assign a random timeout for the very first attempt
                         }
 
                 self.tx_queue.task_done()

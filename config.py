@@ -39,3 +39,11 @@ ETHERNET_UNIT_TIME = 0.002 # 500 bits per second for Ethernet
 
 # Packet Configurations
 ADDR_LEN = 1
+
+# --- Ethernet & CSMA/CA Timing Parameters ---
+# Tune these to adjust how aggressively the network fights for channel access
+CSMA_SILENCE_REQ = 0.6      # Seconds of uninterrupted silence required to assume channel is clear, previously 1.6
+CSMA_BACKOFF_MIN = 0.1      # Minimum random backoff time (seconds), previously 1.7
+CSMA_BACKOFF_MAX = 0.6      # Maximum random backoff time (seconds), previously 2.5
+EFTP_TIMEOUT_MIN = 3.0      # Minimum random timeout before retransmitting (seconds), previously 7.0
+EFTP_TIMEOUT_MAX = 6.0      # Maximum random timeout before retransmitting (seconds), previously 12.0
