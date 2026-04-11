@@ -56,8 +56,12 @@ class EthernetDecoder:
         if max_pwr < current_threshold: 
             return None 
         
-        threshold = max_pwr * 0.5
+        # THE FIX: Lower the absolute threshold to just 20% to act purely as a 
+        # squelch for the zero-padded silence at the end of the packet.
+        squelch_threshold = max_pwr * 0.20
         
+
+        threshold = max_pwr * 0.5
         # 5. Find the true Sync Bit
         crossings = np.where(envelope > threshold)[0]
         if len(crossings) == 0:
@@ -76,8 +80,6 @@ class EthernetDecoder:
         # 6. ROBUST DATA SLICER
         current_idx = first_high_idx + int(samples_per_chip * 1.5)
         bits = ""
-        
-        # Look at a wide 20% chunk of the center of the chip to absorb noise
         window_size = int(samples_per_chip * 0.2) 
         
         while current_idx + samples_per_chip + window_size < len(envelope):
@@ -86,18 +88,20 @@ class EthernetDecoder:
             chip1_pwr = np.mean(envelope[current_idx - window_size : current_idx + window_size])
             chip2_pwr = np.mean(envelope[current_idx + samples_per_chip - window_size : current_idx + samples_per_chip + window_size])
             
-            c1 = 1 if chip1_pwr > threshold else 0
-            c2 = 1 if chip2_pwr > threshold else 0
+            # ========================================================
+            # THE FIX: DIFFERENTIAL MANCHESTER DECODING
+            # ========================================================
             
-            # Manchester Decoding
-            if c1 == 1 and c2 == 0:
-                bits += "0" 
-            elif c1 == 0 and c2 == 1:
-                bits += "1" 
+            # 1. Squelch Check: If both chips are basically silent, we've hit 
+            # the zero-padding at the end of the packet.
+            if chip1_pwr < squelch_threshold and chip2_pwr < squelch_threshold:
+                bits += "0" # Generates \x00 null bytes for the GUI to strip
+                
+            # 2. Differential Comparison: Immune to amplitude ripples!
+            elif chip1_pwr > chip2_pwr:
+                bits += "0"  # High -> Low
             else:
-                # If static destroys a bit, DO NOT DELETE THE PACKET! 
-                # Just guess '0' to keep the timeline perfectly synced for the next letter.
-                bits += "0" 
+                bits += "1"  # Low -> High
                 
             current_idx += samples_per_chip * 2
             
