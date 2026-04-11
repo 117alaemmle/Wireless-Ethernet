@@ -14,14 +14,11 @@ class EthernetTransmitter:
         self.set_led = led_callback
         self.is_channel_busy = busy_check_callback 
 
-    def transmit(self, target, my_address, msg):
+    def transmit(self, target, my_address, msg, packet_type="DT", seq_hex="0000"):
         """Simulates 10BASE5-style Ethernet with CSMA Listen-Before-Talk."""
         
-        # ========================================================
-        # ETHERNET FRAME CHECK SEQUENCE (FCS)
-        # Calculate the CRC-32 of the Address + Payload and append it
-        # ========================================================
-        packet_core = f"{target}{my_address}{msg}"
+        # Inject the 4-character sequence number after the packet type
+        packet_core = f"{target}{my_address}{packet_type}{seq_hex}{msg}"
         crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
         packet = packet_core + crc32_hex
    
@@ -83,11 +80,18 @@ class EthernetTransmitter:
         
 
               
-# 4. INSTANT TRANSMISSION (Gapless One-Shot!)
+        # 4. INSTANT TRANSMISSION (Gapless One-Shot!)
         if self.set_led:
             self.set_led("TX", "red")
         if self.log:
-            self.log(f"-> Ethernet TX to {target}: {msg}")
+            eftp_types = {"DT": "DATA", "AK": "ACK", "AB": "ABORT", "EN": "END", "ER": "ENDREPLY"}
+            ptype_name = eftp_types.get(packet_type, f"UNKNOWN({packet_type})")
+            
+            # THE FIX: Log the sequence number
+            self.log(f"-> Ethernet TX to {target} [{ptype_name} {seq_hex}]: {msg}")
+            
+        # ========================================================
+        # THE FIX: GAPLESS TRANSMISSION
             
         # ========================================================
         # THE FIX: GAPLESS TRANSMISSION
