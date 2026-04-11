@@ -110,25 +110,35 @@ class MarconiNode:
         ######################################
         # Audio Controls between modes, GUI gets drawn in order it is in the code, so it goes before the GUI draw to ensure it stays on top.
         ######################################
-        self.audio_mode = tk.StringVar(value="Cinema")
-        audio_frame = tk.LabelFrame(root, text="Morse Code Sound Profile")
-        audio_frame.pack(padx=10, pady=10, fill="x")
-        
-        for mode in ["Marconi", "Cinema", "Silent"]:
-            tk.Radiobutton(audio_frame, text=mode, variable=self.audio_mode, value=mode).pack(side="left", padx=10)
+        # Create an invisible master frame to hold both boxes in a single row
+        settings_frame = tk.Frame(root)
+        settings_frame.pack(padx=10, pady=5, fill="x")
 
-        # Protocol Selection Drop-down
-        protocol_frame = tk.LabelFrame(root, text="Transmission Protocol")
-        protocol_frame.pack(padx=10, pady=5, fill="x")
+        # 1. Protocol Selection Drop-down (Packed to the Left)
+        protocol_frame = tk.LabelFrame(settings_frame, text="Transmission Protocol")
+        protocol_frame.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         self.protocol_var = tk.StringVar(value="Marconi (OOK)")
         self.protocol_dropdown = ttk.Combobox(
             protocol_frame, 
             textvariable=self.protocol_var, 
-            values=["Marconi (OOK)", "Wireless Ethernet (CSMA/CA)"], #"Teletype (FSK)", "ALOHAnet (OOK)", 
+            values=["Marconi (OOK)", "Wireless Ethernet (CSMA/CA)"], 
             state="readonly"
         )
         self.protocol_dropdown.pack(padx=10, pady=5, side="left")
+
+        #Demo Button
+        self.demo_btn = tk.Button(protocol_frame, text="Load Demo", command=self.load_demo)
+        self.demo_btn.pack(side="left", padx=(0, 10), pady=5)
+        
+        # 2. Audio Controls (Packed to the Right)
+        self.audio_mode = tk.StringVar(value="Cinema")
+        audio_frame = tk.LabelFrame(settings_frame, text="Morse Code Sound Profile")
+        audio_frame.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        for mode in ["Marconi", "Cinema", "Silent"]:
+            tk.Radiobutton(audio_frame, text=mode, variable=self.audio_mode, value=mode).pack(side="left", padx=5)
+
 
         self.channel_busy = False
         self.last_rx_state = False  # Tracks previous state to prevent UI flooding
@@ -169,7 +179,7 @@ class MarconiNode:
         
         # GUI
         self.history = scrolledtext.ScrolledText(root, state='disabled', height=20, width=75)
-        self.history.pack(padx=10, pady=10)
+        self.history.pack(padx=10, pady=10, fill="both", expand=True)
         
         # Create a frame to hold both the dropdown and the text entry
         input_frame = tk.Frame(root)
@@ -358,6 +368,41 @@ class MarconiNode:
         self.tx_queue.put((target, file_header, "EN", None, 0))
         
         self.log(f"[EFTP] {chunk_count} chunks + [END] queued. Transmission starting...", "status")
+
+    def load_demo(self):
+        """Loads a pre-written script to demonstrate CSMA traffic without typing."""
+        target = self.target_var.get()
+        
+        if config.MY_ADDRESS == "A":
+            # Node A plays Romeo
+            messages = [
+                "But, soft! what light through yonder window breaks?",
+                "It is the east, and Juliet is the sun.",
+                "O, speak again, bright angel!"
+            ]
+        elif config.MY_ADDRESS == "B":
+            # Node B plays Juliet
+            messages = [
+                "O Romeo, Romeo! wherefore art thou Romeo?",
+                "Deny thy father and refuse thy name;",
+                "Or, if thou wilt not, be but sworn my love, and I'll no longer be a Capulet."
+            ]
+        else:
+            # Node C (or any others) plays the Mercutio/Tybalt backup script
+            messages = [
+                "Do you bite your thumb at us, sir?",
+                "I do bite my thumb, sir.",
+                "Is the law of our side, if I say ay?"
+            ]
+            
+        self.log(f"[Demo] Queuing Romeo/Juliet test sequence for Node {config.MY_ADDRESS}...", "status")
+        
+        # Drop all the messages into the transmitter queue
+        for msg in messages:
+            # We prepend the "C" so the receiver knows it's a Chat message and not a File!
+            self.tx_queue.put((target, f"C{msg}", "DT", None, 0))
+            self.log(f"[Queued] -> {target}: {msg}", "queue")
+
 
     def tx_daemon(self):
             while True:
