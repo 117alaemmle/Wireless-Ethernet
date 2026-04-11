@@ -34,52 +34,54 @@ class EthernetTransmitter:
         rf_wave = np.concatenate((rf_wave, flush_pad))
 
         # --- CSMA: Carrier Sense Multiple Access ---
-        # "Polite" Access: Wait until the channel is clear before starting.
-        defer_logged = False
-        collision_count = 0
+        
+        # 1. IMMEDIATE ACCESS (Original 1-Persistent CSMA)
+        # If the channel is dead silent right now, skip all backoffs and transmit instantly!
+        if not self.is_channel_busy():
+            pass # Skip the loop and go straight to transmission
+            
+        else:
+            # 2. DEFERRAL & COLLISION AVOIDANCE
+            # Someone is already talking. We must wait, and THEN perform a random backoff 
+            # so that everyone waiting doesn't fire at the exact same millisecond the channel clears.
+            defer_logged = False
+            collision_count = 0
 
-        while True:
-            # 1. Carrier Sense: Wait patiently if someone is currently talking
-            # Because Manchester chips have 40ms gaps of silence, the RX light will flicker.
-            # We must wait for 0.5 seconds of UNINTERRUPTED silence to know the packet is truly over.
-            if self.is_channel_busy() and not defer_logged:
-                if self.log:
-                    self.log("[CSMA] Carrier Sensed: Line busy. Deferring transmission...", "status")
-                defer_logged = True
+            while True:
+                if not defer_logged:
+                    if self.log:
+                        self.log("[CSMA] Carrier Sensed: Line busy. Deferring transmission...", "status")
+                    defer_logged = True
 
-
-            continuous_silence = 0.0
-            while continuous_silence < 0.6:
-                if self.is_channel_busy():
-                    continuous_silence = 0.0 # Someone is talking (or it flickered back on), reset stopwatch!
-                    if not defer_logged:
-                        if self.log:
+                # Wait for 0.6 seconds of uninterrupted silence
+                continuous_silence = 0.0
+                while continuous_silence < 0.6:
+                    if self.is_channel_busy():
+                        continuous_silence = 0.0 # Someone is talking, reset stopwatch!
+                        if not defer_logged and self.log:
                             self.log("[CSMA] Carrier Sensed: Line busy. Deferring transmission...", "status")
-                        defer_logged= True
-                else:
-                    continuous_silence += 0.05
-                time.sleep(0.05)
-            
-            
-            # 2. Collision Avoidance (The Backoff)
-            # The channel just cleared! Wait a random amount of time to ensure 
-            # we don't accidentally transmit at the exact same time as another waiting node.
-            backoff_time = random.uniform(0.7, 1.5)
-            if self.log:
-                self.log(f"[CSMA] Inter-frame gap met. Initiating random backoff for {backoff_time:.2f}s...", "status")
-            time.sleep(backoff_time)
-            
-            # 3. Final Check: Is the channel STILL clear?
-            if not self.is_channel_busy():
+                            defer_logged = True
+                    else:
+                        continuous_silence += 0.05
+                    time.sleep(0.05)
+                
+                # The channel just cleared! Initiate the random backoff.
+                backoff_time = random.uniform(0.7, 1.5)
                 if self.log:
-                    self.log("[CSMA] Backoff complete. Channel clear. Acquiring line...", "status")
-                break # We successfully claimed the channel! Break the loop and transmit.
+                    self.log(f"[CSMA] Inter-frame gap met. Initiating random backoff for {backoff_time:.2f}s...", "status")
+                time.sleep(backoff_time)
+                
+                # Final Check: Did someone else steal the channel during our backoff?
+                if not self.is_channel_busy():
+                    if self.log:
+                        self.log("[CSMA] Backoff complete. Channel clear. Acquiring line...", "status")
+                    break 
 
-            # If someone else started talking during our backoff, the loop repeats:
-            collision_count += 1
-            if self.log:
-                self.log(f"[CSMA] Collision Avoidance! Line became busy during backoff (Attempt {collision_count}). Restarting deferral...", "error")
-            defer_logged = False # Reset so we log the deferral again
+                # If we get here, collision avoidance triggered!
+                collision_count += 1
+                if self.log:
+                    self.log(f"[CSMA] Collision Avoidance! Line became busy during backoff (Attempt {collision_count}). Restarting deferral...", "error")
+                defer_logged = False
         
 
               
