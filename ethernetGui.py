@@ -7,7 +7,7 @@ import adi
 import marconiAudio
 from tkinter import ttk  # Required for the Combobox
 import teletype_protocol # New module to handle teletype.
-import marconi_rx, marconi_audio #Play audio tone through PC speakers
+import marconi_rx, marconi_tx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
 import ethernet_tx, ethernet_rx
 
@@ -56,40 +56,6 @@ if os.name == 'nt':
 
 # Fixed-Length Header Config
 ADDR_LEN = 3 
-
-MORSE_DICT = {
-    # Letters
-    'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
-    'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
-    'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
-    'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-    'Y': '-.--', 'Z': '--..', 
-    
-    # Numbers
-    '1': '.----', '2': '..---', '3': '...--', '4': '....-', '5': '.....', 
-    '6': '-....', '7': '--...', '8': '---..', '9': '----.', '0': '-----', 
-    
-    # Punctuation
-    '.': '.-.-.-',   # Period / Full Stop
-    ',': '--..--',   # Comma
-    '?': '..--..',   # Question Mark
-    '!': '-.-.--',   # Exclamation Mark
-    '-': '-....-',   # Hyphen / Minus
-    '/': '-..-.',    # Slash / Fraction Bar
-    '@': '.--.-.',   # At Sign (Added in 2004 by the ITU!)
-    '(': '-.--.',    # Open Parenthesis
-    ')': '-.--.-',   # Close Parenthesis
-    ':': '---...',   # Colon
-    ';': '-.-.-.',   # Semicolon
-    '=': '-...-',    # Double Dash / Equals (Prosign BT - Break/Pause)
-    '+': '.-.-.',    # Plus (Prosign AR - End of Message)
-    '"': '.-..-.',   # Quotation Mark
-    "'": '.----.',   # Apostrophe
-    
-    # Our software-specific word gap trigger
-    ' ': '/'         
-}
-REVERSE_DICT = {v: k for k, v in MORSE_DICT.items() if v != '/'}
 
 class MarconiNode:
     def __init__(self, root):
@@ -220,11 +186,15 @@ class MarconiNode:
         self.m_s_start = time.time()
 
         # Initialize Decoders for decoding incoming messages
-        self.marconi_decoder = marconi_rx.MarconiDecoder(UNIT_TIME, REVERSE_DICT)
+        self.marconi_decoder = marconi_rx.MarconiDecoder(UNIT_TIME)
         self.teletype_decoder = teletype_rx.TeletypeDecoder(SAMP_RATE)
         self.ethernet_decoder = ethernet_rx.EthernetDecoder(SAMP_RATE, ETHERNET_UNIT_TIME)
 
         # Initialize Transmitters
+        self.marconi_transmitter = marconi_tx.MarconiTransmitter(
+            self.sdr, SAMP_RATE, UNIT_TIME, 
+            self.log, self.set_led, lambda: self.channel_busy, lambda: self.audio_mode.get()
+        )
         self.teletype_transmitter = teletype_tx.TeletypeTransmitter(
             self.sdr, SAMP_RATE, self.log, self.set_led
         )
@@ -328,7 +298,7 @@ class MarconiNode:
                 current_protocol = self.protocol_var.get()
                 
                 if current_protocol == "Marconi (OOK)":
-                    self.transmit_marconi(target, msg)
+                    self.marconi_transmitter.transmit(target, MY_ADDRESS, msg)
                 elif current_protocol == "Teletype (FSK)":
                     self.teletype_transmitter.transmit(target, MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
@@ -340,80 +310,6 @@ class MarconiNode:
                    time.sleep(UNIT_TIME * 35)
                 else:
                     time.sleep(UNIT_TIME * 15)  # Short delay after teletype transmission
-
-
-    def transmit_marconi(self, target, msg):
-        while self.channel_busy:
-            time.sleep(random.uniform(0.5, 2.0))
-            
-        self.log(f"-> Keying {target}: {msg}")
-        self.set_led("TX", "red")
-        
-        packet = f"{target}{MY_ADDRESS}{msg}"
-        
-        # 1. Build the mathematical envelope (1 = Tone, 0 = Silence)
-        units = []
-        for char in packet.upper():
-            code = MORSE_DICT.get(char, "")
-            if code == '/':
-                units.extend([0] * 7) # Word gap
-            else:
-                for sym in code:
-                    if sym == '.':
-                        units.append(1)
-                    elif sym == '-':
-                        units.extend([1, 1, 1])
-                    units.append(0) # Inter-symbol gap
-                units.extend([0, 0]) # Complete the 3-unit inter-character gap
-                
-        # Pad the end with absolute silence (zeros) so the SDR cyclic buffer 
-        # doesn't accidentally repeat the final tone while powering down!
-        units.extend([0] * 10)
-
-        # 2. Convert to a mathematically perfect, continuous Complex Waveform
-        samples_per_unit = int(SAMP_RATE * UNIT_TIME)
-        total_samples = len(units) * samples_per_unit
-        
-        t = np.arange(total_samples)
-        carrier = 0.5 * (np.exp(1j * 2 * np.pi * 0.1 * t)) * 2**14
-        
-        envelope = np.zeros(total_samples)
-        for i, u in enumerate(units):
-            if u == 1:
-                envelope[i*samples_per_unit : (i+1)*samples_per_unit] = 1.0
-                
-        rf_wave = carrier * envelope
-        
-        # 3. Play PC Audio in a background thread so it doesn't delay the perfect RF math
-        threading.Thread(target=self._play_marconi_audio_sync, args=(packet,), daemon=True).start()
-        
-        # 4. Stream to the SDR Hardware in safe chunks (Bypassing Windows Timers entirely!)
-        chunk_size = 131072
-        for i in range(0, len(rf_wave), chunk_size):
-            chunk = rf_wave[i:i+chunk_size]
-            if len(chunk) < chunk_size:
-                pad = np.zeros(chunk_size - len(chunk), dtype=np.complex128)
-                chunk = np.concatenate((chunk, pad))
-            self.sdr.tx(chunk)
-            
-        self.sdr.tx_destroy_buffer()
-        self.set_led("TX", "gray")
-
-    def _play_marconi_audio_sync(self, packet):
-        """Plays the PC speaker audio using OS timers, safely separated from the SDR."""
-        for char in packet.upper():
-            code = MORSE_DICT.get(char, "")
-            if code == '/':
-                time.sleep(UNIT_TIME * 7)
-            else:
-                for sym in code:
-                    dur = 1 if sym == '.' else 3
-                    # Play PC Speaker audio
-                    marconi_audio.spark_sound(dur, UNIT_TIME, self.audio_mode.get())
-                    time.sleep(UNIT_TIME * dur) 
-                    time.sleep(UNIT_TIME) # Inter-symbol gap
-                time.sleep(UNIT_TIME * 2) # Remaining Inter-character gap
-
 
 
     def receiver_loop(self):

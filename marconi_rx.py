@@ -1,9 +1,10 @@
 import time
+import marconi_protocol
 
 class MarconiDecoder:
-    def __init__(self, unit_time, reverse_dict):
+    def __init__(self, unit_time):
         self.unit_time = unit_time
-        self.reverse_dict = reverse_dict
+        self.reverse_dict = marconi_protocol.REVERSE_DICT
         
         self.stream = ""
         self.symbols = ""
