@@ -310,7 +310,8 @@ class MarconiNode:
                     self.sdr.rx_buffer_size = 500
                 # Ethernet/Teletype need giant buffers so no array data is dropped
                 else:
-                    self.sdr.rx_buffer_size = 1048576
+                    #self.sdr.rx_buffer_size = 1048576 big as can be
+                    self.sdr.rx_buffer_size = 262144 # 262,144 provides 0.26s latency for rapid CSMA carrier sensing, but is large enough to prevent math from dropping USB samples!
                     
                 self.last_protocol = current_protocol
             samples = self.sdr.rx()

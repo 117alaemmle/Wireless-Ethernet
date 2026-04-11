@@ -46,7 +46,7 @@ class EthernetTransmitter:
             # Because Manchester chips have 40ms gaps of silence, the RX light will flicker.
             # We must wait for 0.5 seconds of UNINTERRUPTED silence to know the packet is truly over.
             continuous_silence = 0.0
-            while continuous_silence < 0.5:
+            while continuous_silence < 0.6:
                 if self.is_channel_busy():
                     continuous_silence = 0.0 # Someone is talking (or it flickered back on), reset stopwatch!
                 else:
