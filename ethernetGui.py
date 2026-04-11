@@ -10,64 +10,19 @@ import teletype_protocol # New module to handle teletype.
 import marconi_rx, marconi_tx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
 import ethernet_tx, ethernet_rx
-
-def get_node_identity():
-    """Reads the PC's MAC address and assigns the 3-character Node ID."""
-    # Grab the 48-bit MAC address and format it into a standard hex string
-    mac_num = uuid.getnode()
-    mac_hex = ':'.join(['{:02x}'.format((mac_num >> elements) & 0xff) for elements in range(0,8*6,8)][::-1])
-    
-    print(f"Hardware MAC Address Detected: {mac_hex}")
-    
-    # --- MAC ADDRESS DICTIONARY ---
-    known_nodes = {
-        "44:fa:66:57:b0:3a": "001",  # Windows 11 Laptop
-        "58:cd:c9:11:b5:94": "002"   # Windows 10 Laptop
-    }
-    
-    # Return the mapped ID, or default to "003" if it's an unknown computer
-    return known_nodes.get(mac_hex, "003")
-
-# --- Configuration ---
-MY_ADDRESS = get_node_identity()
-URI = "ip:192.168.2.1"
-FREQ = 433e6
-SAMP_RATE = 1e6
-#UNIT_TIME = 0.12  # Solid reliability #10 Words Per Minute for Marconi, a beginner speed.
-#UNIT_TIME = 0.06 # 20 Words per minute, a professional operator's standard speed in ~1912. 
-UNIT_TIME = 0.08 # 15 Words per minute, a common speed for radio operators in the early 1900s, including those on the Titanic. This speed allows for clear communication while still being efficient, especially given the heavy brass telegraph keys used at the time.
-#A professional Marconi operator in the early 1900s (like the operators on the Titanic) typically cruised at 15 to 20 WPM. Their speed was physically limited by the massive, heavy brass telegraph keys used to switch the high-voltage spark-gap equipment.
-#By World War II, operators using smaller keys or semi-automatic "bugs" (which used a vibrating pendulum to generate dots automatically) could comfortably send at 25 to 30 WPM, with elite operators pushing 40+ WPM.
-ETHERNET_UNIT_TIME = 0.002 #500 bits per second.
-#THRESHOLD = 580   # Using 'max' power logic for snappier detection
-#THRESHOLD = 500 
-
-# ==============================================================================
-# OS-LEVEL TIMER FIX FOR WINDOWS 10
-# Forces the Windows scheduler to 1ms resolution so time.sleep() doesn't stutter,
-# preventing Morse characters from fracturing (e.g., 'O' splitting into 'M' and 'T').
-# ==============================================================================
-if os.name == 'nt':
-    try:
-        import ctypes
-        ctypes.windll.winmm.timeBeginPeriod(1)
-    except Exception:
-        pass
-
-# Fixed-Length Header Config
-ADDR_LEN = 3 
+import config
 
 class MarconiNode:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"Wireless Node {MY_ADDRESS}")
+        self.root.title(f"Wireless Node {config.MY_ADDRESS}")
         
         # Hardware Setup
         try:
-            self.sdr = adi.Pluto(URI)
-            self.sdr.sample_rate = int(SAMP_RATE)
-            self.sdr.tx_lo = int(FREQ)
-            self.sdr.rx_lo = int(FREQ)
+            self.sdr = adi.Pluto(config.URI)
+            self.sdr.sample_rate = int(config.SAMP_RATE)
+            self.sdr.tx_lo = int(config.FREQ)
+            self.sdr.rx_lo = int(config.FREQ)
             self.sdr.tx_hardwaregain_chan0 = -10 #-10DB for direct wired connection
             #self.sdr.tx_hardwaregain_chan0 = 0 #0DB for antenna use, gives it a boost to be able to hear anything at all.
             self.sdr.rx_hardwaregain_chan0 = -20 #25DB gain for direct connection.
@@ -186,20 +141,20 @@ class MarconiNode:
         self.m_s_start = time.time()
 
         # Initialize Decoders for decoding incoming messages
-        self.marconi_decoder = marconi_rx.MarconiDecoder(UNIT_TIME)
-        self.teletype_decoder = teletype_rx.TeletypeDecoder(SAMP_RATE)
-        self.ethernet_decoder = ethernet_rx.EthernetDecoder(SAMP_RATE, ETHERNET_UNIT_TIME)
+        self.marconi_decoder = marconi_rx.MarconiDecoder(config.UNIT_TIME)
+        self.teletype_decoder = teletype_rx.TeletypeDecoder(config.SAMP_RATE)
+        self.ethernet_decoder = ethernet_rx.EthernetDecoder(config.SAMP_RATE, config.ETHERNET_UNIT_TIME)
 
         # Initialize Transmitters
         self.marconi_transmitter = marconi_tx.MarconiTransmitter(
-            self.sdr, SAMP_RATE, UNIT_TIME, 
+            self.sdr, config.SAMP_RATE, config.UNIT_TIME, 
             self.log, self.set_led, lambda: self.channel_busy, lambda: self.audio_mode.get()
         )
         self.teletype_transmitter = teletype_tx.TeletypeTransmitter(
-            self.sdr, SAMP_RATE, self.log, self.set_led
+            self.sdr, config.SAMP_RATE, self.log, self.set_led
         )
         self.ethernet_transmitter = ethernet_tx.EthernetTransmitter(
-            self.sdr, SAMP_RATE, ETHERNET_UNIT_TIME, self.log, self.set_led, lambda: self.channel_busy
+            self.sdr, config.SAMP_RATE, config.ETHERNET_UNIT_TIME, self.log, self.set_led, lambda: self.channel_busy
         )
 
         # --- Teletype (FSK) Receiver State ---
@@ -213,7 +168,7 @@ class MarconiNode:
         self.entry.pack(padx=10, pady=(0, 10))
         self.entry.bind("<Return>", self.on_send)
         
-        self.log(f"*** Node {MY_ADDRESS} Listening (Promiscuous Mode) ***")
+        self.log(f"*** Node {config.MY_ADDRESS} Listening (Promiscuous Mode) ***")
 
 
         # Start background threads
@@ -298,18 +253,18 @@ class MarconiNode:
                 current_protocol = self.protocol_var.get()
                 
                 if current_protocol == "Marconi (OOK)":
-                    self.marconi_transmitter.transmit(target, MY_ADDRESS, msg)
+                    self.marconi_transmitter.transmit(target, config.MY_ADDRESS, msg)
                 elif current_protocol == "Teletype (FSK)":
-                    self.teletype_transmitter.transmit(target, MY_ADDRESS, msg)     
+                    self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
-                    self.ethernet_transmitter.transmit(target, MY_ADDRESS, msg)
+                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg)
 
                 self.tx_queue.task_done()
                 #Increase delay time from 15 to 35 tto ensure enqueued messages to not get muddled.
                 if current_protocol == "Marconi (OOK)":
-                   time.sleep(UNIT_TIME * 35)
+                   time.sleep(config.UNIT_TIME * 35)
                 else:
-                    time.sleep(UNIT_TIME * 15)  # Short delay after teletype transmission
+                    time.sleep(config.UNIT_TIME * 15)  # Short delay after teletype transmission
 
 
     def receiver_loop(self):
@@ -410,7 +365,7 @@ class MarconiNode:
     def parse_fixed_packet(self, data, protocol):
         """Standardized Parsing with Ethernet CRC logic (No ACKs)."""
         data = data.rstrip('\x00')
-        if len(data) >= (ADDR_LEN * 2):
+        if len(data) >= (config.ADDR_LEN * 2):
             dest = data[:3]
             src = data[3:6]
             
@@ -437,7 +392,7 @@ class MarconiNode:
                 
                 # CRC Passed!
                 msg = payload
-                if dest == MY_ADDRESS:
+                if dest == config.MY_ADDRESS:
                     # Explicitly show the user that the math verified the data
                     self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
                     self.log(f"*** FROM {src} ***: {msg}", "received")
@@ -449,7 +404,7 @@ class MarconiNode:
             # ----------------------------------------------------
             else:
                 msg = data[6:]
-                if dest == MY_ADDRESS:
+                if dest == config.MY_ADDRESS:
                     self.log(f"*** FROM {src} ***: {msg}", "received")
                 else:
                     self.log(f"[Sniffed] {src}->{dest}: {msg}", "sniffed")
