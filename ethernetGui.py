@@ -524,7 +524,7 @@ class MarconiNode:
         if self.unacked_packet:
             elapsed_time = time.time() - self.unacked_packet["time"]
             
-            if elapsed_time > 4.0:
+            if elapsed_time > 10.0:
                 target = self.unacked_packet["target"]
                 msg = self.unacked_packet["msg"]
                 self.unacked_packet["retries"] += 1
