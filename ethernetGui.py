@@ -303,13 +303,13 @@ class MarconiNode:
         target = self.target_var.get()
         
         # Pass None for seq_hex so the daemon knows to generate a new one
-        self.tx_queue.put((target, msg, "DT", None))
+        self.tx_queue.put((target, msg, "DT", None, 0))
         self.log(f"[Queued] -> {target}: {msg}")
 
     def tx_daemon(self):
             while True:
                 # Unpack all 4 variables
-                target, msg, ptype, seq_hex = self.tx_queue.get()
+                target, msg, ptype, seq_hex, retries = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
                 
                 if current_protocol == "Marconi (OOK)":
@@ -330,7 +330,7 @@ class MarconiNode:
                             "target": target, 
                             "msg": msg, 
                             "time": time.time(), 
-                            "retries": 0,
+                            "retries": retries,
                             "seq_hex": seq_hex # Store the sequence number!
                         }
 
@@ -500,7 +500,7 @@ class MarconiNode:
                             
                         # ALWAYS auto-reply with an ACK, even for duplicates!
                         self.log(f"[EFTP] Auto-replying with ACK for {seq_hex}...", "status")
-                        self.tx_queue.put((src, "", "AK", seq_hex))
+                        self.tx_queue.put((src, "", "AK", seq_hex, 0))
                         
                     elif ptype == "AK":
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
@@ -534,10 +534,10 @@ class MarconiNode:
                 self.unacked_packet["retries"] += 1
                 retries = self.unacked_packet["retries"]
                 
-                self.log(f"[EFTP] Timeout: No ACK from {target} in 4.0s! Retransmitting (Attempt {retries})...", "error")
+                self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
                 
                 # Re-queue the exact same message WITH ITS ORIGINAL SEQUENCE NUMBER
-                self.tx_queue.put((target, msg, "DT", self.unacked_packet["seq_hex"]))
+                self.tx_queue.put((target, msg, "DT", self.unacked_packet["seq_hex"], retries))
                 self.unacked_packet = None
                 
                 # Clear the tracker so the loop doesn't enqueue multiple copies 
