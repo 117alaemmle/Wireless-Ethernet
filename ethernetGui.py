@@ -5,7 +5,7 @@ import zlib
 import numpy as np  #pip install numpy pyadi-iio
 import adi
 import marconiAudio
-from tkinter import ttk  # Required for the Combobox
+from tkinter import ttk, filedialog  # Required for the Combobox
 import teletype_protocol # New module to handle teletype.
 import marconi_rx, marconi_tx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
@@ -190,8 +190,12 @@ class MarconiNode:
         self.entry = tk.Entry(input_frame)
         self.entry.pack(side="left", fill="x", expand=True)
         self.entry.bind("<Return>", self.on_send)
+
+        # Add the "Send File" button
+        self.file_btn = tk.Button(input_frame, text="Send File", command=self.on_send_file)
+        self.file_btn.pack(side="left", padx=(5, 0))
         
-        self.log(f"*** Node {config.MY_ADDRESS} Listening (Promiscuous Mode) ***")
+        self.log(f"*** Node {config.MY_ADDRESS} Listening ***")
 
         # --- EFTP State Tracker ---
         self.unacked_packet = None
@@ -303,11 +307,28 @@ class MarconiNode:
         target = self.target_var.get()
         
         # Pass None for seq_hex so the daemon knows to generate a new one
-        self.tx_queue.put((target, msg, "DT", None, 0))
+        self.tx_queue.put((target, f"C{msg}", "DT", None, 0))
         self.log(f"[Queued] -> {target}: {msg}")
+    
+    def on_send_file(self):
+        """Opens a file dialog, reads a .txt file, and preps it for transmission."""
+        filepath = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
+        if not filepath: return
+        
+        filename = os.path.basename(filepath)
+        self.log(f"[File] Selected {filename} for transmission. (Chunking coming in Step 2!)", "status")
+        
+        # We will read the file, chunk it, and enqueue it here in the next step!
 
     def tx_daemon(self):
             while True:
+                # ====================================================
+                # EFTP STOP-AND-WAIT LOCK
+                # Pause the daemon if we are waiting for an ACK!
+                # ====================================================
+                while self.unacked_packet is not None:
+                    time.sleep(0.1)
+                
                 # Unpack all 4 variables
                 target, msg, ptype, seq_hex, retries = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
@@ -495,18 +516,32 @@ class MarconiNode:
                         if seq_int == expected_seq:
                             # Perfect, in-order packet
                             self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
-                            self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
+                            
+                            # THE FIX: Strip the port character off the payload
+                            port = msg[0]
+                            payload_data = msg[1:]
+                            
+                            if port == "C":
+                                self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {payload_data}", "received")
+                            # We will handle "F" routing in Step 3!
+
                             self.rx_seq_nums[src] = seq_int + 1 
                             
                         elif (seq_int == expected_seq - 1) or (expected_seq == 0 and seq_int == 0xFFFF):
-                            # True Duplicate (The ACK for the last packet was lost, so the sender retried it)
+                            # True Duplicate 
                             self.log(f"[EFTP] Duplicate DATA packet {seq_hex} received from {src}. Ignoring payload.", "error")
                             
                         else:
-                            # Desynchronization! A node restarted, or we completely missed a packet.
+                            # Desynchronization! 
                             self.log(f"[EFTP] Sequence Resync: Expected {expected_seq:04x}, got {seq_hex}. Accepting payload...", "error")
-                            self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
-                            self.rx_seq_nums[src] = seq_int + 1 # Resynchronize to the new sequence!
+                            
+                            port = msg[0]
+                            payload_data = msg[1:]
+                            
+                            if port == "C":
+                                self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {payload_data}", "received")
+                                
+                            self.rx_seq_nums[src] = seq_int + 1
                             
                         # ALWAYS auto-reply with an ACK
                         self.log(f"[EFTP] Auto-replying with ACK for {seq_hex}...", "status")
