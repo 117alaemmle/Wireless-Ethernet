@@ -193,11 +193,15 @@ class MarconiNode:
         
         self.log(f"*** Node {config.MY_ADDRESS} Listening (Promiscuous Mode) ***")
 
+        # --- EFTP State Tracker ---
+        self.unacked_packet = None
 
         # Start background threads
         threading.Thread(target=self.receiver_loop, daemon=True).start()
         time.sleep(0.5)  # Allow receiver to stabilize between hardware calls
         threading.Thread(target=self.tx_daemon, daemon=True).start()
+        # Start the EFTP timeout monitor loop
+        self.root.after(500, self.check_eftp_timeouts)
 
 
 
@@ -316,6 +320,13 @@ class MarconiNode:
                     self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                     self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype)
+                    if ptype == "DT": #EFTP acknowledgement stopwatch
+                        self.unacked_packet = {
+                            "target": target, 
+                            "msg": msg, 
+                            "time": time.time(), 
+                            "retries": 0
+                        }
 
                 self.tx_queue.task_done()
                 #Increase delay time from 15 to 35 tto ensure enqueued messages to not get muddled.
@@ -487,6 +498,11 @@ class MarconiNode:
                         # Enqueue an ACK packet back to the sender! 
                         # ACKs don't need a message payload, so we send an empty string.
                         self.tx_queue.put((src, "", "AK"))
+
+                    elif ptype == "AK":
+                        if self.unacked_packet and self.unacked_packet["target"] == src:
+                            self.log(f"[EFTP] ACK received from {src}! Delivery confirmed.", "status")
+                            self.unacked_packet = None # Clear the stopwatch!
                         
                 else:
                     self.log(f"[Sniffed] {src}->{dest} [{ptype_name}]: {msg} (CRC Verified: {received_crc.upper()})", "sniffed")
@@ -502,6 +518,29 @@ class MarconiNode:
                     self.log(f"[Sniffed] {src}->{dest}: {msg}", "sniffed")
         else:
             self.log(f"?? Runt Packet: {data}", "error")
+
+    def check_eftp_timeouts(self):
+        """Monitors pending transmissions and automatically re-queues them if they time out."""
+        if self.unacked_packet:
+            elapsed_time = time.time() - self.unacked_packet["time"]
+            
+            if elapsed_time > 2.0:
+                target = self.unacked_packet["target"]
+                msg = self.unacked_packet["msg"]
+                self.unacked_packet["retries"] += 1
+                retries = self.unacked_packet["retries"]
+                
+                self.log(f"[EFTP] Timeout: No ACK from {target} in 2.0s! Retransmitting (Attempt {retries})...", "error")
+                
+                # Re-queue the exact same message for transmission
+                self.tx_queue.put((target, msg, "DT"))
+                
+                # Clear the tracker so the loop doesn't enqueue multiple copies 
+                # while waiting for the tx_daemon to physically transmit this retry!
+                self.unacked_packet = None
+                
+        # Loop this check every 500ms
+        self.root.after(500, self.check_eftp_timeouts)
 
 if __name__ == "__main__":
     root = tk.Tk()
