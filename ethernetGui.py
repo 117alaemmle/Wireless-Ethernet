@@ -300,16 +300,13 @@ class MarconiNode:
         # Pull the target directly from the dropdown menu's saved state
         target = self.target_var.get()
         
-        self.tx_queue.put((target, msg))
+        self.tx_queue.put((target, msg), "DT")
         self.log(f"[Queued] -> {target}: {msg}")
 
     def tx_daemon(self):
             while True:
-                target, msg = self.tx_queue.get()
-                
-                # while self.channel_busy:
-                #     time.sleep(random.uniform(0.5, 2.0))
-                
+                target, msg, ptype = self.tx_queue.get()
+                         
                 # Check which protocol the user has selected
                 current_protocol = self.protocol_var.get()
                 
@@ -318,7 +315,7 @@ class MarconiNode:
                 elif current_protocol == "Teletype (FSK)":
                     self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
-                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg)
+                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype)
 
                 self.tx_queue.task_done()
                 #Increase delay time from 15 to 35 tto ensure enqueued messages to not get muddled.
@@ -481,6 +478,16 @@ class MarconiNode:
                 if dest == config.MY_ADDRESS:
                     self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
                     self.log(f"*** FROM {src} [{ptype_name}] ***: {msg}", "received")
+                    
+                    # ====================================================
+                    # EFTP: AUTOMATIC ACKNOWLEDGMENT
+                    # ====================================================
+                    if ptype == "DT":
+                        self.log(f"[EFTP] Data received from {src}. Auto-replying with ACK...", "status")
+                        # Enqueue an ACK packet back to the sender! 
+                        # ACKs don't need a message payload, so we send an empty string.
+                        self.tx_queue.put((src, "", "AK"))
+                        
                 else:
                     self.log(f"[Sniffed] {src}->{dest} [{ptype_name}]: {msg} (CRC Verified: {received_crc.upper()})", "sniffed")
 
