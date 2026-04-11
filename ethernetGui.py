@@ -311,7 +311,6 @@ class MarconiNode:
                 # Unpack all 4 variables
                 target, msg, ptype, seq_hex, retries = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
-                self.tx_seq_nums[target] = seq_int + 1
 
                 if current_protocol == "Marconi (OOK)":
                     self.marconi_transmitter.transmit(target, config.MY_ADDRESS, msg)
@@ -323,6 +322,7 @@ class MarconiNode:
                     if ptype == "DT" and seq_hex is None:
                         seq_int = self.tx_seq_nums.get(target, 0)
                         seq_hex = f"{seq_int:04x}"
+                        self.tx_seq_nums[target] = seq_int + 1
 
                     self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
                     
