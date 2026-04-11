@@ -207,8 +207,6 @@ class MarconiNode:
         threading.Thread(target=self.receiver_loop, daemon=True).start()
         time.sleep(0.5)  # Allow receiver to stabilize between hardware calls
         threading.Thread(target=self.tx_daemon, daemon=True).start()
-        # Start the EFTP timeout monitor loop
-        self.root.after(500, self.check_eftp_timeouts)
 
 
 
@@ -355,45 +353,64 @@ class MarconiNode:
     def tx_daemon(self):
             while True:
                 # ====================================================
-                # EFTP STOP-AND-WAIT LOCK
-                # Pause the daemon if we are waiting for an ACK!
+                # EFTP STOP-AND-WAIT LOCK & TIMEOUT MANAGER
                 # ====================================================
                 while self.unacked_packet is not None:
+                    elapsed_time = time.time() - self.unacked_packet["time"]
+                    
+                    if elapsed_time > 10.0:
+                        target = self.unacked_packet["target"]
+                        msg = self.unacked_packet["msg"]
+                        self.unacked_packet["retries"] += 1
+                        retries = self.unacked_packet["retries"]
+                        seq_hex = self.unacked_packet["seq_hex"]
+                        ptype = self.unacked_packet["ptype"]
+                        
+                        self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
+                        
+                        # Retransmit directly from the daemon! No queue-jumping needed.
+                        self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
+                        
+                        # Reset the stopwatch so it waits another 10s before trying again
+                        self.unacked_packet["time"] = time.time() 
+                        
                     time.sleep(0.1)
-                
-                # Unpack all 4 variables
+
+                # Unpack all 5 variables
                 target, msg, ptype, seq_hex, retries = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
-
+                
                 if current_protocol == "Marconi (OOK)":
                     self.marconi_transmitter.transmit(target, config.MY_ADDRESS, msg)
                 elif current_protocol == "Teletype (FSK)":
                     self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                     
-                    # Generate a new Sequence Number for fresh DATA packets
-                    if ptype == "DT" and seq_hex is None:
+                    # THE FIX: Generate a Sequence Number for BOTH Data and End packets!
+                    if ptype in ["DT", "EN"] and seq_hex is None:
                         seq_int = self.tx_seq_nums.get(target, 0)
                         seq_hex = f"{seq_int:04x}"
                         self.tx_seq_nums[target] = seq_int + 1
 
                     self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
                     
-                    if ptype == "DT":
+                    # THE FIX: Track BOTH Data and End packets for timeouts!
+                    if ptype in ["DT", "EN"]:
                         self.unacked_packet = {
                             "target": target, 
                             "msg": msg, 
                             "time": time.time(), 
                             "retries": retries,
-                            "seq_hex": seq_hex # Store the sequence number!
+                            "seq_hex": seq_hex,
+                            "ptype": ptype # Track the type so we can resend EN packets properly!
                         }
 
                 self.tx_queue.task_done()
-                #Increase delay time from 15 to 35 tto ensure enqueued messages to not get muddled.
+                
                 if current_protocol == "Marconi (OOK)":
                    time.sleep(config.UNIT_TIME * 35)
                 else:
-                    time.sleep(config.UNIT_TIME * 15)  # Short delay after teletype transmission
+                    time.sleep(config.UNIT_TIME * 15)
 
 
     def receiver_loop(self):
@@ -677,29 +694,6 @@ class MarconiNode:
         else:
             self.log(f"?? Runt Packet: {data}", "error")
 
-    def check_eftp_timeouts(self):
-        """Monitors pending transmissions and automatically re-queues them if they time out."""
-        if self.unacked_packet:
-            elapsed_time = time.time() - self.unacked_packet["time"]
-            
-            if elapsed_time > 10.0:
-                target = self.unacked_packet["target"]
-                msg = self.unacked_packet["msg"]
-                self.unacked_packet["retries"] += 1
-                retries = self.unacked_packet["retries"]
-                
-                self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
-                
-                # Re-queue the exact same message WITH ITS ORIGINAL SEQUENCE NUMBER
-                self.tx_queue.put((target, msg, "DT", self.unacked_packet["seq_hex"], retries))
-                self.unacked_packet = None
-                
-                # Clear the tracker so the loop doesn't enqueue multiple copies 
-                # while waiting for the tx_daemon to physically transmit this retry!
-                self.unacked_packet = None
-                
-        # Loop this check every 500ms
-        self.root.after(500, self.check_eftp_timeouts)
 
 if __name__ == "__main__":
     root = tk.Tk()
