@@ -176,11 +176,11 @@ class MarconiNode:
         tk.Label(input_frame, text="To:").pack(side="left", padx=(0, 5))
         
         # Target Selection Dropdown
-        self.target_var = tk.StringVar(value="001")
+        self.target_var = tk.StringVar(value="A")
         self.target_dropdown = ttk.Combobox(
             input_frame, 
             textvariable=self.target_var, 
-            values=["001", "002"],
+            values=["A", "B", "C"],
             state="readonly",
             width=5
         )
@@ -258,28 +258,25 @@ class MarconiNode:
         self.history.configure(state='normal')
         
         if not self.m_header_printed:
-            # Wait until we have all 6 MAC address characters
-            if len(self.m_live_buffer) >= 6:
-                dest = self.m_live_buffer[:3]
-                src = self.m_live_buffer[3:6]
+            # THE FIX: Wait until we have exactly 2 MAC address characters (Dest + Src)
+            if len(self.m_live_buffer) >= 2:
+                dest = self.m_live_buffer[:1]
+                src = self.m_live_buffer[1:2]
                 
-                # Assign colors based on promiscuous sniffing vs direct target
                 tag = "received" if dest == config.MY_ADDRESS else "sniffed"
-                
                 ts = time.strftime("[%H:%M:%S]")
-                # Build the beautiful formatted header!
+                
                 header = f"{ts} *** FROM {src} **** (TO: {dest}) ***: "
                 self.history.insert(tk.END, header, tag)
                 
-                # Print any leftover payload characters that arrived with the 6th character
-                payload = self.m_live_buffer[6:]
+                # Print leftover payload characters (starting at index 2)
+                payload = self.m_live_buffer[2:]
                 if payload:
                     self.history.insert(tk.END, payload, tag)
                     
                 self.m_header_printed = True
         else:
-            # Header is already printed. Just stream the new text!
-            dest = self.m_live_buffer[:3]
+            dest = self.m_live_buffer[:1]
             tag = "received" if dest == config.MY_ADDRESS else "sniffed"
             self.history.insert(tk.END, text, tag)
             
@@ -444,18 +441,21 @@ class MarconiNode:
         """Standardized Parsing with Ethernet CRC logic (No ACKs)."""
         data = data.rstrip('\x00')
         if len(data) >= (config.ADDR_LEN * 2):
-            dest = data[:3]
-            src = data[3:6]
+            # Dynamically slice based on the config length!
+            dest = data[:config.ADDR_LEN]
+            src = data[config.ADDR_LEN : config.ADDR_LEN*2]
             
             # ----------------------------------------------------
-            # ETHERNET MODE: CRC LOGIC (Demonstration Mode)
+            # ETHERNET MODE: CRC LOGIC 
             # ----------------------------------------------------
             if protocol == "Wireless Ethernet (CSMA/CA)":
-                if len(data) < 14: # 3 Dest + 3 Src + 8 CRC = 14 min
+                min_len = (config.ADDR_LEN * 2) + 8
+                if len(data) < min_len: 
                     self.log(f"?? Runt Ethernet Packet: {data}", "error")
                     return
                     
-                payload = data[6:-8]
+                # Dynamically slice out the payload
+                payload = data[(config.ADDR_LEN * 2):-8]
                 received_crc = data[-8:]
                 
                 # Verify the 32-bit Frame Check Sequence
@@ -463,15 +463,13 @@ class MarconiNode:
                 calculated_crc = f"{zlib.crc32(frame_to_check) & 0xFFFFFFFF:08x}"
                 
                 if received_crc != calculated_crc:
-                    # Demo Mode: Explicitly show the user that the CRC caught a corrupted frame!
                     self.log(f"[CRC FAILED] Received: {received_crc.upper()} != Calculated: {calculated_crc.upper()}", "error")
                     self.log(f"Hardware dropped corrupted frame from {src}: [{payload}]", "error")
-                    return # Drop the packet!
+                    return 
                 
                 # CRC Passed!
                 msg = payload
                 if dest == config.MY_ADDRESS:
-                    # Explicitly show the user that the math verified the data
                     self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
                     self.log(f"*** FROM {src} ***: {msg}", "received")
                 else:
@@ -481,7 +479,7 @@ class MarconiNode:
             # MARCONI / ALOHA MODE (No Checksums)
             # ----------------------------------------------------
             else:
-                msg = data[6:]
+                msg = data[(config.ADDR_LEN * 2):]
                 if dest == config.MY_ADDRESS:
                     self.log(f"*** FROM {src} ***: {msg}", "received")
                 else:

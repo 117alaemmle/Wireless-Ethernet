@@ -21,11 +21,11 @@ def get_node_identity():
     
     # --- MAC ADDRESS DICTIONARY ---
     known_nodes = {
-        "44:fa:66:57:b0:3a": "001",  # Windows 11 Laptop
-        "58:cd:c9:11:b5:94": "002"   # Windows 10 Laptop
+        "44:fa:66:57:b0:3a": "A",  # Windows 11 Laptop
+        "58:cd:c9:11:b5:94": "B"   # Windows 10 Laptop
     }
     
-    return known_nodes.get(mac_hex, "003")
+    return known_nodes.get(mac_hex, "C")
 
 # --- Global Hardware & Protocol Configuration ---
 MY_ADDRESS = get_node_identity()
@@ -38,4 +38,4 @@ UNIT_TIME = 0.08         # 15 WPM for Marconi
 ETHERNET_UNIT_TIME = 0.002 # 500 bits per second for Ethernet
 
 # Packet Configurations
-ADDR_LEN = 3
+ADDR_LEN = 1
