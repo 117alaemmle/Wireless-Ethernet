@@ -83,11 +83,18 @@ class EthernetTransmitter:
         
 
               
-# 4. INSTANT TRANSMISSION (Gapless One-Shot!)
+        # 4. INSTANT TRANSMISSION (Gapless One-Shot!)
         if self.set_led:
             self.set_led("TX", "red")
         if self.log:
-            self.log(f"-> Ethernet TX to {target}: {msg}")
+            # Map the 2-letter code to the paper's terminology for logging
+            eftp_types = {"DT": "DATA", "AK": "ACK", "AB": "ABORT", "EN": "END", "ER": "ENDREPLY"}
+            ptype_name = eftp_types.get(packet_type, f"UNKNOWN({packet_type})")
+            
+            self.log(f"-> Ethernet TX to {target} [{ptype_name}]: {msg}")
+            
+        # ========================================================
+        # THE FIX: GAPLESS TRANSMISSION
             
         # ========================================================
         # THE FIX: GAPLESS TRANSMISSION
