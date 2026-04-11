@@ -201,6 +201,7 @@ class MarconiNode:
         self.unacked_packet = None
         self.tx_seq_nums = {} # Tracks the next seq number to SEND to a target
         self.rx_seq_nums = {} # Tracks the expected seq number to RECEIVE from a source
+        self.file_buffers = {} # THE FIX: Dictionary to hold incoming file chunks!
 
         # Start background threads
         threading.Thread(target=self.receiver_loop, daemon=True).start()
@@ -311,14 +312,45 @@ class MarconiNode:
         self.log(f"[Queued] -> {target}: {msg}")
     
     def on_send_file(self):
-        """Opens a file dialog, reads a .txt file, and preps it for transmission."""
+        """Opens a file dialog, reads a .txt file, and chunks it into EFTP packets."""
         filepath = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
         if not filepath: return
         
         filename = os.path.basename(filepath)
-        self.log(f"[File] Selected {filename} for transmission. (Chunking coming in Step 2!)", "status")
+        target = self.target_var.get()
         
-        # We will read the file, chunk it, and enqueue it here in the next step!
+        try:
+            # Read the entire text file into memory
+            with open(filepath, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+        except Exception as e:
+            self.log(f"[File Error] Could not read {filename}: {e}", "error")
+            return
+            
+        self.log(f"[EFTP] Initiating transfer of {filename} ({len(file_content)} chars) to {target}...", "status")
+        
+        # Build our custom "Port + Filename" header (e.g., "Ffrankenstein.txt|")
+        file_header = f"F{filename}|"
+        
+        # Max payload size per original Ethernet specs (~4000 bits / ~500 chars).
+        # We'll use a conservative 250 characters to ensure maximum RF reliability!
+        chunk_size = 250 - len(file_header)
+        
+        # Slice the file into chunks and drop them all into the queue
+        chunk_count = 0
+        for i in range(0, len(file_content), chunk_size):
+            chunk_data = file_content[i : i + chunk_size]
+            full_payload = file_header + chunk_data
+            
+            # Enqueue the chunk! The daemon's Stop-and-Wait lock will automatically pace these.
+            self.tx_queue.put((target, full_payload, "DT", None, 0))
+            chunk_count += 1
+            
+        # Finally, append the [END] packet to tell the receiver to close and save the file
+        # We include the header here too so the receiver knows exactly WHICH file is ending.
+        self.tx_queue.put((target, file_header, "EN", None, 0))
+        
+        self.log(f"[EFTP] {chunk_count} chunks + [END] queued. Transmission starting...", "status")
 
     def tx_daemon(self):
             while True:
@@ -523,7 +555,23 @@ class MarconiNode:
                             
                             if port == "C":
                                 self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {payload_data}", "received")
-                            # We will handle "F" routing in Step 3!
+                                
+                            elif port == "F":
+                                # Split the string at the first pipe '|' character
+                                try:
+                                    filename, chunk_text = payload_data.split('|', 1)
+                                    
+                                    # If this is the first chunk, initialize the buffer
+                                    if filename not in self.file_buffers:
+                                        self.file_buffers[filename] = ""
+                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "status")
+                                        
+                                    # Append the new text!
+                                    self.file_buffers[filename] += chunk_text
+                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "status")
+                                    
+                                except ValueError:
+                                    self.log(f"[EFTP] Malformed file packet from {src}. Missing separator.", "error")
 
                             self.rx_seq_nums[src] = seq_int + 1 
                             
@@ -540,6 +588,23 @@ class MarconiNode:
                             
                             if port == "C":
                                 self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {payload_data}", "received")
+                                
+                            elif port == "F":
+                                # Split the string at the first pipe '|' character
+                                try:
+                                    filename, chunk_text = payload_data.split('|', 1)
+                                    
+                                    # If this is the first chunk, initialize the buffer
+                                    if filename not in self.file_buffers:
+                                        self.file_buffers[filename] = ""
+                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "status")
+                                        
+                                    # Append the new text!
+                                    self.file_buffers[filename] += chunk_text
+                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "status")
+                                    
+                                except ValueError:
+                                    self.log(f"[EFTP] Malformed file packet from {src}. Missing separator.", "error")
                                 
                             self.rx_seq_nums[src] = seq_int + 1
                             

@@ -87,8 +87,10 @@ class EthernetTransmitter:
             eftp_types = {"DT": "DATA", "AK": "ACK", "AB": "ABORT", "EN": "END", "ER": "ENDREPLY"}
             ptype_name = eftp_types.get(packet_type, f"UNKNOWN({packet_type})")
             
+            display_msg = msg[1:] if (len(msg) > 0 and msg[0] in ["C", "F"]) else msg
+
             # THE FIX: Log the sequence number
-            self.log(f"-> Ethernet TX to {target} [{ptype_name} {seq_hex}]: {msg}")
+            self.log(f"-> Ethernet TX to {target} [{ptype_name} {seq_hex}]: {display_msg}")
             
         # ========================================================
         # THE FIX: GAPLESS TRANSMISSION
