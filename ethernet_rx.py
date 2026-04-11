@@ -5,111 +5,106 @@ class EthernetDecoder:
     def __init__(self, samp_rate, unit_time):
         self.samp_rate = samp_rate
         self.unit_time = unit_time
-        self.buffer = []
-        self.last_busy_time = 0
+        self.half_unit = unit_time / 2.0
+        self.samples_per_chip = int(samp_rate * self.half_unit)
+        
+        # State Machine Variables
         self.receiving = False
+        self.carryover_samples = np.array([], dtype=np.complex128)
+        self.current_bit_stream = ""
+        self.sync_found = False
+        self.last_idx = 0
 
     def process(self, samples, channel_busy, current_threshold=100):
-        """Accumulates the OOK packet and decodes the Manchester bits."""
-        if channel_busy:
+        """Processes a single buffer and returns any newly decoded text."""
+        if not channel_busy and not self.receiving:
+            return None # Channel is quiet, do nothing
+
+        # 1. Start of Packet Detection
+        if channel_busy and not self.receiving:
             self.receiving = True
-            self.last_busy_time = time.time()
-            self.buffer.append(samples)
-            return None
+            self.sync_found = False
+            self.current_bit_stream = ""
+            self.carryover_samples = samples # Start fresh
         else:
-            if self.receiving:
-                self.buffer.append(samples)
-                
-                # Hang time: Wait 0.5s to ensure the packet is truly over
-                if (time.time() - self.last_busy_time) > 0.5: 
-                    self.receiving = False
-                    
-                    if len(self.buffer) > 0:
-                        full_waveform = np.concatenate(self.buffer)
-                        self.buffer = []
-                        # Pass the threshold to the decoder
-                        return self.decode_packet(full_waveform, current_threshold)
-            return None
-            
-    def decode_packet(self, waveform, current_threshold):
-        """Slices the waveform into chips and reassembles the ASCII bytes."""
-       # 1. Shift the 100 kHz carrier down to 0 Hz.
-        # This pushes the other radio's LO Leakage down to -100 kHz.
-        t = np.arange(len(waveform)) / self.samp_rate
-        baseband = waveform * np.exp(-1j * 2 * np.pi * 100000.0 * t)
+            # Append new samples to our "working" window
+            self.carryover_samples = np.concatenate((self.carryover_samples, samples))
+
+        # 2. Baseband Processing (Downconvert and Filter)
+        # Shift the 100 kHz carrier down to 0 Hz.
+        t = np.arange(len(self.carryover_samples)) / self.samp_rate
+        baseband = self.carryover_samples * np.exp(-1j * 2 * np.pi * 100000.0 * t)
         
-        # 2. Low-Pass Filter
-        # A window of 50 averages exactly 5 full cycles of the -100 kHz interference, 
-        # mathematically canceling the leakage to zero instantly!
+        # Low-Pass Filter
         window = 50
         smoothed = np.convolve(baseband, np.ones(window)/window, mode='same')
         
-        # 3. Extract the perfectly clean power envelope
+        # Extract the perfectly clean power envelope
         envelope = np.abs(smoothed)
         
-        half_unit = self.unit_time / 2.0
-        samples_per_chip = int(self.samp_rate * half_unit)
-        
-        # 4. ROBUST THRESHOLDING
-        # Use the 95th percentile to completely ignore massive, split-second static pops
         max_pwr = np.percentile(envelope, 95)
-        if max_pwr < current_threshold: 
-            return None 
-        
-        # THE FIX: Lower the absolute threshold to just 20% to act purely as a 
-        # squelch for the zero-padded silence at the end of the packet.
-        squelch_threshold = max_pwr * 0.20
-        
-
-        threshold = max_pwr * 0.5
-        # 5. Find the true Sync Bit
-        crossings = np.where(envelope > threshold)[0]
-        if len(crossings) == 0:
+        if max_pwr < current_threshold:
             return None
-            
-        first_high_idx = None
-        for idx in crossings:
-            check_idx = idx + int(samples_per_chip * 0.5)
-            if check_idx < len(envelope) and envelope[check_idx] > threshold:
-                first_high_idx = idx 
-                break
-                
-        if first_high_idx is None:
-            return None 
 
-        # 6. ROBUST DATA SLICER
-        current_idx = first_high_idx + int(samples_per_chip * 1.5)
-        bits = ""
-        window_size = int(samples_per_chip * 0.2) 
+        # 3. Find Sync (Only if we haven't found it for this packet yet)
+        if not self.sync_found:
+            sync_threshold = max_pwr * 0.5
+            crossings = np.where(envelope > sync_threshold)[0]
+            if len(crossings) == 0:
+                return None
+                
+            first_high_idx = None
+            for idx in crossings:
+                check_idx = idx + int(self.samples_per_chip * 0.5)
+                if check_idx < len(envelope) and envelope[check_idx] > sync_threshold:
+                    first_high_idx = idx 
+                    break
+                    
+            if first_high_idx is None:
+                return None
+            
+            self.sync_found = True
+            self.last_idx = first_high_idx + int(self.samples_per_chip * 1.5)
+
+        # 4. Stream Slicer
+        new_bits = ""
+        window_size = int(self.samples_per_chip * 0.2)
+        squelch_threshold = max_pwr * 0.2
         
-        while current_idx + samples_per_chip + window_size < len(envelope):
-            
+        while self.last_idx + self.samples_per_chip + window_size < len(envelope):
             # Average the power across the wide window
-            chip1_pwr = np.mean(envelope[current_idx - window_size : current_idx + window_size])
-            chip2_pwr = np.mean(envelope[current_idx + samples_per_chip - window_size : current_idx + samples_per_chip + window_size])
+            chip1_pwr = np.mean(envelope[self.last_idx - window_size : self.last_idx + window_size])
+            chip2_pwr = np.mean(envelope[self.last_idx + self.samples_per_chip - window_size : self.last_idx + self.samples_per_chip + window_size])
             
-            # ========================================================
-            # THE FIX: DIFFERENTIAL MANCHESTER DECODING
-            # ========================================================
-            
-            # 1. Squelch Check: If both chips are basically silent, we've hit 
-            # the zero-padding at the end of the packet.
+            # Differential Comparison
             if chip1_pwr < squelch_threshold and chip2_pwr < squelch_threshold:
-                bits += "0" # Generates \x00 null bytes for the GUI to strip
-                
-            # 2. Differential Comparison: Immune to amplitude ripples!
+                new_bits += "0" 
             elif chip1_pwr > chip2_pwr:
-                bits += "0"  # High -> Low
+                new_bits += "0"  # High -> Low
             else:
-                bits += "1"  # Low -> High
+                new_bits += "1"  # Low -> High
                 
-            current_idx += samples_per_chip * 2
+            self.last_idx += self.samples_per_chip * 2
             
-        # 7. Convert binary blocks back to text
-        decoded_text = ""
-        for i in range(0, len(bits), 8):
-            byte = bits[i:i+8]
-            if len(byte) == 8:
-                decoded_text += chr(int(byte, 2))
+        # 5. Maintain Carryover
+        # Keep only the samples we haven't decoded yet for the next buffer
+        self.carryover_samples = self.carryover_samples[self.last_idx:]
+        self.last_idx = 0 
+        
+        self.current_bit_stream += new_bits
+        
+        # 6. Convert full bytes
+        return self.bits_to_text()
+
+    def bits_to_text(self):
+        """Translates completed 8-bit blocks into characters."""
+        text = ""
+        while len(self.current_bit_stream) >= 8:
+            byte_bits = self.current_bit_stream[:8]
+            self.current_bit_stream = self.current_bit_stream[8:]
+            
+            # Only convert to text if the byte isn't a null padding byte
+            if byte_bits != "00000000":
+                text += chr(int(byte_bits, 2))
                 
-        return decoded_text if decoded_text else None
+        return text if text else None

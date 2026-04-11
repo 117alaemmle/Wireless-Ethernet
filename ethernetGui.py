@@ -366,7 +366,12 @@ class MarconiNode:
                 packet_data = self.teletype_decoder.process(samples, self.channel_busy)
             elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                 # Ethernet uses raw samples to calculate the Manchester transitions
-                packet_data = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
+                #packet_data = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
+                live_text = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
+
+                if live_text:
+                    # Update the GUI history immediately without a newline
+                    self.root.after(0, lambda: self.append_live_text(live_text))
                 
             # If either decoder finished assembling a packet, process it
             if packet_data:
