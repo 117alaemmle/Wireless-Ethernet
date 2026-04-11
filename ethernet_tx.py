@@ -49,7 +49,7 @@ class EthernetTransmitter:
 
 
             continuous_silence = 0.0
-            while continuous_silence < 0.6:
+            while continuous_silence < 1.6:
                 if self.is_channel_busy():
                     continuous_silence = 0.0 # Someone is talking (or it flickered back on), reset stopwatch!
                     if not defer_logged:
@@ -64,7 +64,7 @@ class EthernetTransmitter:
             # 2. Collision Avoidance (The Backoff)
             # The channel just cleared! Wait a random amount of time to ensure 
             # we don't accidentally transmit at the exact same time as another waiting node.
-            backoff_time = random.uniform(0.7, 1.5)
+            backoff_time = random.uniform(1.7, 2.5)
             if self.log:
                 self.log(f"[CSMA] Inter-frame gap met. Initiating random backoff for {backoff_time:.2f}s...", "status")
             time.sleep(backoff_time)
