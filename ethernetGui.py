@@ -524,13 +524,13 @@ class MarconiNode:
         if self.unacked_packet:
             elapsed_time = time.time() - self.unacked_packet["time"]
             
-            if elapsed_time > 3.0:
+            if elapsed_time > 4.0:
                 target = self.unacked_packet["target"]
                 msg = self.unacked_packet["msg"]
                 self.unacked_packet["retries"] += 1
                 retries = self.unacked_packet["retries"]
                 
-                self.log(f"[EFTP] Timeout: No ACK from {target} in 2.0s! Retransmitting (Attempt {retries})...", "error")
+                self.log(f"[EFTP] Timeout: No ACK from {target} in 4.0s! Retransmitting (Attempt {retries})...", "error")
                 
                 # Re-queue the exact same message for transmission
                 self.tx_queue.put((target, msg, "DT"))
