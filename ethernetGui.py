@@ -446,20 +446,25 @@ class MarconiNode:
             src = data[config.ADDR_LEN : config.ADDR_LEN*2]
             
             # ----------------------------------------------------
-            # ETHERNET MODE: CRC LOGIC 
+            # ETHERNET MODE: EFTP PACKET ROUTING & CRC LOGIC 
             # ----------------------------------------------------
             if protocol == "Wireless Ethernet (CSMA/CA)":
-                min_len = (config.ADDR_LEN * 2) + 8
+                # Min length: (Dest + Src) + 2 Type + 8 CRC
+                min_len = (config.ADDR_LEN * 2) + 2 + 8
                 if len(data) < min_len: 
                     self.log(f"?? Runt Ethernet Packet: {data}", "error")
                     return
-                    
-                # Dynamically slice out the payload
-                payload = data[(config.ADDR_LEN * 2):-8]
+                
+                # Extract the 2-character packet type
+                ptype_start = config.ADDR_LEN * 2
+                ptype = data[ptype_start : ptype_start + 2]
+                
+                # Payload now starts 2 characters later
+                payload = data[ptype_start + 2 : -8]
                 received_crc = data[-8:]
                 
-                # Verify the 32-bit Frame Check Sequence
-                frame_to_check = f"{dest}{src}{payload}".encode()
+                # Verify the 32-bit Frame Check Sequence (Including the packet type!)
+                frame_to_check = f"{dest}{src}{ptype}{payload}".encode()
                 calculated_crc = f"{zlib.crc32(frame_to_check) & 0xFFFFFFFF:08x}"
                 
                 if received_crc != calculated_crc:
@@ -467,13 +472,17 @@ class MarconiNode:
                     self.log(f"Hardware dropped corrupted frame from {src}: [{payload}]", "error")
                     return 
                 
+                # Map the 2-letter code to the paper's terminology for logging
+                eftp_types = {"DT": "DATA", "AK": "ACK", "AB": "ABORT", "EN": "END", "ER": "ENDREPLY"}
+                ptype_name = eftp_types.get(ptype, f"UNKNOWN({ptype})")
+                
                 # CRC Passed!
                 msg = payload
                 if dest == config.MY_ADDRESS:
                     self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
-                    self.log(f"*** FROM {src} ***: {msg}", "received")
+                    self.log(f"*** FROM {src} [{ptype_name}] ***: {msg}", "received")
                 else:
-                    self.log(f"[Sniffed] {src}->{dest}: {msg} (CRC Verified: {received_crc.upper()})", "sniffed")
+                    self.log(f"[Sniffed] {src}->{dest} [{ptype_name}]: {msg} (CRC Verified: {received_crc.upper()})", "sniffed")
 
             # ----------------------------------------------------
             # MARCONI / ALOHA MODE (No Checksums)
