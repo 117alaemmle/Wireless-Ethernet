@@ -164,8 +164,27 @@ class MarconiNode:
         # GUI
         self.history = scrolledtext.ScrolledText(root, state='disabled', height=20, width=75)
         self.history.pack(padx=10, pady=10)
-        self.entry = tk.Entry(root, width=75)
-        self.entry.pack(padx=10, pady=(0, 10))
+        
+        # Create a frame to hold both the dropdown and the text entry
+        input_frame = tk.Frame(root)
+        input_frame.pack(padx=10, pady=(0, 10), fill="x")
+        
+        tk.Label(input_frame, text="To:").pack(side="left", padx=(0, 5))
+        
+        # Target Selection Dropdown
+        self.target_var = tk.StringVar(value="001")
+        self.target_dropdown = ttk.Combobox(
+            input_frame, 
+            textvariable=self.target_var, 
+            values=["001", "002"],
+            state="readonly",
+            width=5
+        )
+        self.target_dropdown.pack(side="left", padx=(0, 10))
+        
+        # The Message Entry Box
+        self.entry = tk.Entry(input_frame)
+        self.entry.pack(side="left", fill="x", expand=True)
         self.entry.bind("<Return>", self.on_send)
         
         self.log(f"*** Node {config.MY_ADDRESS} Listening (Promiscuous Mode) ***")
@@ -231,14 +250,15 @@ class MarconiNode:
 
 
     def on_send(self, event):
-        raw = self.entry.get().strip()
-        if len(raw) < 5: return # Need at least '002 H'
+        msg = self.entry.get().strip()
+        if len(msg) == 0: 
+            return # Prevent sending empty blank messages
+            
         self.entry.delete(0, tk.END)
         
-        target = raw[:3]
-        msg = raw[3:].strip()
-        #Changing method to enable enqueing of messages
-        #threading.Thread(target=self.transmit, args=(target, msg), daemon=True).start()
+        # Pull the target directly from the dropdown menu's saved state
+        target = self.target_var.get()
+        
         self.tx_queue.put((target, msg))
         self.log(f"[Queued] -> {target}: {msg}")
 
