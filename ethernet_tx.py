@@ -41,7 +41,7 @@ class EthernetTransmitter:
             # We must wait for 0.5 seconds of UNINTERRUPTED silence to know the packet is truly over.
             if self.is_channel_busy() and not defer_logged:
                 if self.log:
-                    self.log("[CSMA] Deferring transmission...", "status")
+                    self.log("[CSMA] Deferring transmission...", "csma")
                 defer_logged = True
 
 
@@ -51,7 +51,7 @@ class EthernetTransmitter:
                     continuous_silence = 0.0 # Someone is talking (or it flickered back on), reset stopwatch!
                     if not defer_logged:
                         if self.log:
-                            self.log("[CSMA] Deferring transmission...", "status")
+                            self.log("[CSMA] Deferring transmission...", "csma")
                         defer_logged= True
                 else:
                     continuous_silence += 0.05
@@ -63,13 +63,13 @@ class EthernetTransmitter:
             # we don't accidentally transmit at the exact same time as another waiting node.
             backoff_time = random.uniform(config.CSMA_BACKOFF_MIN, config.CSMA_BACKOFF_MAX )
             if self.log:
-                self.log(f"[CSMA] Inter-frame gap met. Initiating random backoff for {backoff_time:.2f}s...", "status")
+                self.log(f"[CSMA] Inter-frame gap met. Initiating random backoff for {backoff_time:.2f}s...", "csma")
             time.sleep(backoff_time)
             
             # 3. Final Check: Is the channel STILL clear?
             if not self.is_channel_busy():
                 if self.log:
-                    self.log("[CSMA] Backoff complete. Channel clear. Acquiring line...", "status")
+                    self.log("[CSMA] Backoff complete. Channel clear. Acquiring line...", "csma")
                 break # We successfully claimed the channel! Break the loop and transmit.
 
             # If someone else started talking during our backoff, the loop repeats:
@@ -90,7 +90,7 @@ class EthernetTransmitter:
             display_msg = msg[1:] if (len(msg) > 0 and msg[0] in ["C", "F"]) else msg
 
             # THE FIX: Log the sequence number
-            self.log(f"-> Ethernet TX to {target} [{ptype_name} {seq_hex}]: {display_msg}")
+            self.log(f"-> Ethernet TX to {target} [{ptype_name} {seq_hex}]: {display_msg}", "tx")
             
         # ========================================================
         # THE FIX: GAPLESS TRANSMISSION

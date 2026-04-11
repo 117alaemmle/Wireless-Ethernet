@@ -28,7 +28,7 @@ class MarconiTransmitter:
         clean_msg = msg[1:] if (len(msg) > 0 and msg[0] in ["C", "F"]) else msg
             
         if self.log:
-            self.log(f"-> Keying {target}: {clean_msg}")
+            self.log(f"-> Keying {target}: {clean_msg}", "tx")
         if self.set_led:
             self.set_led("TX", "red")
         

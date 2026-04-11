@@ -217,11 +217,18 @@ class MarconiNode:
             ts = time.strftime("[%H:%M:%S]")
             self.history.configure(state='normal')
 
-            # Define the color palette
+            # Define the original color palette
             self.history.tag_config("status", foreground="gray")
             self.history.tag_config("received", foreground="blue")
             self.history.tag_config("sniffed", foreground="purple")
             self.history.tag_config("error", foreground="red")
+            
+            # THE FIX: Add the new semantic tags!
+            self.history.tag_config("csma", foreground="brown")
+            self.history.tag_config("tx", foreground="green")
+            self.history.tag_config("queue", foreground="orange")
+            self.history.tag_config("eftp_ack", foreground="darkcyan")
+            self.history.tag_config("file", foreground="magenta")
             
             # Insert the text with the assigned tag
             self.history.insert(tk.END, f"{ts} {message}\n", tag)
@@ -309,7 +316,7 @@ class MarconiNode:
         
         # Pass None for seq_hex so the daemon knows to generate a new one
         self.tx_queue.put((target, f"C{msg}", "DT", None, 0))
-        self.log(f"[Queued] -> {target}: {msg}")
+        self.log(f"[Queued] -> {target}: {msg}", "queue")
     
     def on_send_file(self):
         """Opens a file dialog, reads a .txt file, and chunks it into EFTP packets."""
@@ -606,11 +613,11 @@ class MarconiNode:
                                     # If this is the first chunk, initialize the buffer
                                     if filename not in self.file_buffers:
                                         self.file_buffers[filename] = ""
-                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "status")
+                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "file")
                                         
                                     # Append the new text!
                                     self.file_buffers[filename] += chunk_text
-                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "status")
+                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "file")
                                     
                                 except ValueError:
                                     self.log(f"[EFTP] Malformed file packet from {src}. Missing separator.", "error")
@@ -639,11 +646,11 @@ class MarconiNode:
                                     # If this is the first chunk, initialize the buffer
                                     if filename not in self.file_buffers:
                                         self.file_buffers[filename] = ""
-                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "status")
+                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "file")
                                         
                                     # Append the new text!
                                     self.file_buffers[filename] += chunk_text
-                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "status")
+                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "file")
                                     
                                 except ValueError:
                                     self.log(f"[EFTP] Malformed file packet from {src}. Missing separator.", "error")
@@ -656,7 +663,7 @@ class MarconiNode:
                         
                     elif ptype == "AK":
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
-                            self.log(f"[EFTP] ACK {seq_hex} received from {src}! Delivery confirmed.", "status")
+                            self.log(f"[EFTP] ACK {seq_hex} received from {src}! Delivery confirmed.", "eftp_ack")
                             self.unacked_packet = None 
                     
                     # ====================================================
@@ -699,7 +706,7 @@ class MarconiNode:
                     elif ptype == "ER":
                         # If we get the ENDREPLY, the file transfer is officially over!
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
-                            self.log(f"[EFTP] ENDREPLY {seq_hex} received from {src}! File transfer successfully concluded.", "status")
+                            self.log(f"[EFTP] ENDREPLY {seq_hex} received from {src}! File transfer successfully concluded.", "eftp_ack")
                             self.unacked_packet = None # Release the daemon lock!
                             
                             
