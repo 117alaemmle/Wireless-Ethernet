@@ -311,7 +311,8 @@ class MarconiNode:
                 # Unpack all 4 variables
                 target, msg, ptype, seq_hex, retries = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
-                
+                self.tx_seq_nums[target] = seq_int + 1
+
                 if current_protocol == "Marconi (OOK)":
                     self.marconi_transmitter.transmit(target, config.MY_ADDRESS, msg)
                 elif current_protocol == "Teletype (FSK)":
@@ -492,13 +493,22 @@ class MarconiNode:
                         expected_seq = self.rx_seq_nums.get(src, 0)
                         
                         if seq_int == expected_seq:
+                            # Perfect, in-order packet
                             self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
                             self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
-                            self.rx_seq_nums[src] = expected_seq + 1 # Increment expected sequence!
-                        else:
+                            self.rx_seq_nums[src] = seq_int + 1 
+                            
+                        elif (seq_int == expected_seq - 1) or (expected_seq == 0 and seq_int == 0xFFFF):
+                            # True Duplicate (The ACK for the last packet was lost, so the sender retried it)
                             self.log(f"[EFTP] Duplicate DATA packet {seq_hex} received from {src}. Ignoring payload.", "error")
                             
-                        # ALWAYS auto-reply with an ACK, even for duplicates!
+                        else:
+                            # Desynchronization! A node restarted, or we completely missed a packet.
+                            self.log(f"[EFTP] Sequence Resync: Expected {expected_seq:04x}, got {seq_hex}. Accepting payload...", "error")
+                            self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
+                            self.rx_seq_nums[src] = seq_int + 1 # Resynchronize to the new sequence!
+                            
+                        # ALWAYS auto-reply with an ACK
                         self.log(f"[EFTP] Auto-replying with ACK for {seq_hex}...", "status")
                         self.tx_queue.put((src, "", "AK", seq_hex, 0))
                         
@@ -506,7 +516,7 @@ class MarconiNode:
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
                             self.log(f"[EFTP] ACK {seq_hex} received from {src}! Delivery confirmed.", "status")
                             self.unacked_packet = None 
-                            self.tx_seq_nums[src] = self.tx_seq_nums.get(src, 0) + 1 # Ready next sequence!
+                            
                             
                 else:
                     self.log(f"[Sniffed] {src}->{dest} [{ptype_name} {seq_hex}]: {msg} (CRC Verified)", "sniffed")
