@@ -5,7 +5,7 @@ import zlib
 import numpy as np  #pip install numpy pyadi-iio
 import adi
 import marconiAudio
-from tkinter import ttk  # Required for the Combobox
+from tkinter import ttk, filedialog  # Required for the Combobox
 import teletype_protocol # New module to handle teletype.
 import marconi_rx, marconi_tx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
@@ -190,20 +190,23 @@ class MarconiNode:
         self.entry = tk.Entry(input_frame)
         self.entry.pack(side="left", fill="x", expand=True)
         self.entry.bind("<Return>", self.on_send)
+
+        # Add the "Send File" button
+        self.file_btn = tk.Button(input_frame, text="Send File", command=self.on_send_file)
+        self.file_btn.pack(side="left", padx=(5, 0))
         
-        self.log(f"*** Node {config.MY_ADDRESS} Listening (Promiscuous Mode) ***")
+        self.log(f"*** Node {config.MY_ADDRESS} Listening ***")
 
         # --- EFTP State Tracker ---
         self.unacked_packet = None
         self.tx_seq_nums = {} # Tracks the next seq number to SEND to a target
         self.rx_seq_nums = {} # Tracks the expected seq number to RECEIVE from a source
+        self.file_buffers = {} # THE FIX: Dictionary to hold incoming file chunks!
 
         # Start background threads
         threading.Thread(target=self.receiver_loop, daemon=True).start()
         time.sleep(0.5)  # Allow receiver to stabilize between hardware calls
         threading.Thread(target=self.tx_daemon, daemon=True).start()
-        # Start the EFTP timeout monitor loop
-        self.root.after(500, self.check_eftp_timeouts)
 
 
 
@@ -303,44 +306,111 @@ class MarconiNode:
         target = self.target_var.get()
         
         # Pass None for seq_hex so the daemon knows to generate a new one
-        self.tx_queue.put((target, msg, "DT", None, 0))
+        self.tx_queue.put((target, f"C{msg}", "DT", None, 0))
         self.log(f"[Queued] -> {target}: {msg}")
+    
+    def on_send_file(self):
+        """Opens a file dialog, reads a .txt file, and chunks it into EFTP packets."""
+        filepath = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
+        if not filepath: return
+        
+        filename = os.path.basename(filepath)
+        target = self.target_var.get()
+        
+        try:
+            # Read the entire text file into memory
+            with open(filepath, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+        except Exception as e:
+            self.log(f"[File Error] Could not read {filename}: {e}", "error")
+            return
+            
+        self.log(f"[EFTP] Initiating transfer of {filename} ({len(file_content)} chars) to {target}...", "status")
+        
+        # Build our custom "Port + Filename" header (e.g., "Ffrankenstein.txt|")
+        file_header = f"F{filename}|"
+        
+        # Max payload size per original Ethernet specs (~4000 bits / ~500 chars).
+        # We'll use a conservative 250 characters to ensure maximum RF reliability!
+        chunk_size = 250 - len(file_header)
+        
+        # Slice the file into chunks and drop them all into the queue
+        chunk_count = 0
+        for i in range(0, len(file_content), chunk_size):
+            chunk_data = file_content[i : i + chunk_size]
+            full_payload = file_header + chunk_data
+            
+            # Enqueue the chunk! The daemon's Stop-and-Wait lock will automatically pace these.
+            self.tx_queue.put((target, full_payload, "DT", None, 0))
+            chunk_count += 1
+            
+        # Finally, append the [END] packet to tell the receiver to close and save the file
+        # We include the header here too so the receiver knows exactly WHICH file is ending.
+        self.tx_queue.put((target, file_header, "EN", None, 0))
+        
+        self.log(f"[EFTP] {chunk_count} chunks + [END] queued. Transmission starting...", "status")
 
     def tx_daemon(self):
             while True:
-                # Unpack all 4 variables
+                # ====================================================
+                # EFTP STOP-AND-WAIT LOCK & TIMEOUT MANAGER
+                # ====================================================
+                while self.unacked_packet is not None:
+                    elapsed_time = time.time() - self.unacked_packet["time"]
+                    
+                    if elapsed_time > 10.0:
+                        target = self.unacked_packet["target"]
+                        msg = self.unacked_packet["msg"]
+                        self.unacked_packet["retries"] += 1
+                        retries = self.unacked_packet["retries"]
+                        seq_hex = self.unacked_packet["seq_hex"]
+                        ptype = self.unacked_packet["ptype"]
+                        
+                        self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
+                        
+                        # Retransmit directly from the daemon! No queue-jumping needed.
+                        self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
+                        
+                        # Reset the stopwatch so it waits another 10s before trying again
+                        self.unacked_packet["time"] = time.time() 
+                        
+                    time.sleep(0.1)
+
+                # Unpack all 5 variables
                 target, msg, ptype, seq_hex, retries = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
-
+                
                 if current_protocol == "Marconi (OOK)":
                     self.marconi_transmitter.transmit(target, config.MY_ADDRESS, msg)
                 elif current_protocol == "Teletype (FSK)":
                     self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                     
-                    # Generate a new Sequence Number for fresh DATA packets
-                    if ptype == "DT" and seq_hex is None:
+                    # THE FIX: Generate a Sequence Number for BOTH Data and End packets!
+                    if ptype in ["DT", "EN"] and seq_hex is None:
                         seq_int = self.tx_seq_nums.get(target, 0)
                         seq_hex = f"{seq_int:04x}"
                         self.tx_seq_nums[target] = seq_int + 1
 
                     self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
                     
-                    if ptype == "DT":
+                    # THE FIX: Track BOTH Data and End packets for timeouts!
+                    if ptype in ["DT", "EN"]:
                         self.unacked_packet = {
                             "target": target, 
                             "msg": msg, 
                             "time": time.time(), 
                             "retries": retries,
-                            "seq_hex": seq_hex # Store the sequence number!
+                            "seq_hex": seq_hex,
+                            "ptype": ptype # Track the type so we can resend EN packets properly!
                         }
 
                 self.tx_queue.task_done()
-                #Increase delay time from 15 to 35 tto ensure enqueued messages to not get muddled.
+                
                 if current_protocol == "Marconi (OOK)":
                    time.sleep(config.UNIT_TIME * 35)
                 else:
-                    time.sleep(config.UNIT_TIME * 15)  # Short delay after teletype transmission
+                    time.sleep(config.UNIT_TIME * 15)
 
 
     def receiver_loop(self):
@@ -495,18 +565,65 @@ class MarconiNode:
                         if seq_int == expected_seq:
                             # Perfect, in-order packet
                             self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
-                            self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
+                            
+                            # THE FIX: Strip the port character off the payload
+                            port = msg[0]
+                            payload_data = msg[1:]
+                            
+                            if port == "C":
+                                self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {payload_data}", "received")
+                                
+                            elif port == "F":
+                                # Split the string at the first pipe '|' character
+                                try:
+                                    filename, chunk_text = payload_data.split('|', 1)
+                                    
+                                    # If this is the first chunk, initialize the buffer
+                                    if filename not in self.file_buffers:
+                                        self.file_buffers[filename] = ""
+                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "status")
+                                        
+                                    # Append the new text!
+                                    self.file_buffers[filename] += chunk_text
+                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "status")
+                                    
+                                except ValueError:
+                                    self.log(f"[EFTP] Malformed file packet from {src}. Missing separator.", "error")
+
                             self.rx_seq_nums[src] = seq_int + 1 
                             
                         elif (seq_int == expected_seq - 1) or (expected_seq == 0 and seq_int == 0xFFFF):
-                            # True Duplicate (The ACK for the last packet was lost, so the sender retried it)
+                            # True Duplicate 
                             self.log(f"[EFTP] Duplicate DATA packet {seq_hex} received from {src}. Ignoring payload.", "error")
                             
                         else:
-                            # Desynchronization! A node restarted, or we completely missed a packet.
+                            # Desynchronization! 
                             self.log(f"[EFTP] Sequence Resync: Expected {expected_seq:04x}, got {seq_hex}. Accepting payload...", "error")
-                            self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
-                            self.rx_seq_nums[src] = seq_int + 1 # Resynchronize to the new sequence!
+                            
+                            port = msg[0]
+                            payload_data = msg[1:]
+                            
+                            if port == "C":
+                                self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {payload_data}", "received")
+                                
+                            elif port == "F":
+                                # Split the string at the first pipe '|' character
+                                try:
+                                    filename, chunk_text = payload_data.split('|', 1)
+                                    
+                                    # If this is the first chunk, initialize the buffer
+                                    if filename not in self.file_buffers:
+                                        self.file_buffers[filename] = ""
+                                        self.log(f"[EFTP] Incoming file transfer started: {filename}...", "status")
+                                        
+                                    # Append the new text!
+                                    self.file_buffers[filename] += chunk_text
+                                    self.log(f"[EFTP] Buffered chunk for {filename} ({len(chunk_text)} chars)...", "status")
+                                    
+                                except ValueError:
+                                    self.log(f"[EFTP] Malformed file packet from {src}. Missing separator.", "error")
+                                
+                            self.rx_seq_nums[src] = seq_int + 1
                             
                         # ALWAYS auto-reply with an ACK
                         self.log(f"[EFTP] Auto-replying with ACK for {seq_hex}...", "status")
@@ -516,6 +633,49 @@ class MarconiNode:
                         if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
                             self.log(f"[EFTP] ACK {seq_hex} received from {src}! Delivery confirmed.", "status")
                             self.unacked_packet = None 
+                    
+                    # ====================================================
+                    # EFTP: END OF FILE HANDSHAKE
+                    # ====================================================
+                    elif ptype == "EN":
+                        self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
+                        
+                        port = msg[0]
+                        payload_data = msg[1:]
+                        
+                        if port == "F":
+                            try:
+                                # Extract the filename from the header (e.g., "frankenstein.txt|")
+                                filename = payload_data.split('|')[0]
+                                
+                                if filename in self.file_buffers:
+                                    # Save the completed buffer directly to the folder where the script is running!
+                                    save_path = os.path.join(os.getcwd(), filename)
+                                    with open(save_path, 'w', encoding='utf-8') as f:
+                                        f.write(self.file_buffers[filename])
+                                        
+                                    self.log(f"[EFTP] SUCCESS: {filename} fully reassembled and saved to disk!", "received")
+                                    
+                                    # Clear the memory buffer so it's fresh for the next transfer
+                                    del self.file_buffers[filename]
+                                else:
+                                    self.log(f"[EFTP] Received END for {filename}, but no data was buffered.", "error")
+                                    
+                            except Exception as e:
+                                self.log(f"[EFTP] Error saving file to disk: {e}", "error")
+                                
+                        # ALWAYS reply with the ENDREPLY packet to satisfy the sender's Stop-and-Wait lock!
+                        self.log(f"[EFTP] Auto-replying with ENDREPLY for {seq_hex}...", "status")
+                        self.tx_queue.put((src, "", "ER", seq_hex, 0))
+
+                    # ====================================================
+                    # EFTP: RECEIVING THE ENDREPLY
+                    # ====================================================
+                    elif ptype == "ER":
+                        # If we get the ENDREPLY, the file transfer is officially over!
+                        if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
+                            self.log(f"[EFTP] ENDREPLY {seq_hex} received from {src}! File transfer successfully concluded.", "status")
+                            self.unacked_packet = None # Release the daemon lock!
                             
                             
                 else:
@@ -530,32 +690,10 @@ class MarconiNode:
                     self.log(f"*** FROM {src} ***: {msg}", "received")
                 else:
                     self.log(f"[Sniffed] {src}->{dest}: {msg}", "sniffed")
+
         else:
             self.log(f"?? Runt Packet: {data}", "error")
 
-    def check_eftp_timeouts(self):
-        """Monitors pending transmissions and automatically re-queues them if they time out."""
-        if self.unacked_packet:
-            elapsed_time = time.time() - self.unacked_packet["time"]
-            
-            if elapsed_time > 10.0:
-                target = self.unacked_packet["target"]
-                msg = self.unacked_packet["msg"]
-                self.unacked_packet["retries"] += 1
-                retries = self.unacked_packet["retries"]
-                
-                self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
-                
-                # Re-queue the exact same message WITH ITS ORIGINAL SEQUENCE NUMBER
-                self.tx_queue.put((target, msg, "DT", self.unacked_packet["seq_hex"], retries))
-                self.unacked_packet = None
-                
-                # Clear the tracker so the loop doesn't enqueue multiple copies 
-                # while waiting for the tx_daemon to physically transmit this retry!
-                self.unacked_packet = None
-                
-        # Loop this check every 500ms
-        self.root.after(500, self.check_eftp_timeouts)
 
 if __name__ == "__main__":
     root = tk.Tk()
