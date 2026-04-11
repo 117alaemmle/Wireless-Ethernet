@@ -24,13 +24,15 @@ class MarconiTransmitter:
         # CSMA: Wait if someone is currently transmitting
         while self.is_channel_busy():
             time.sleep(random.uniform(0.5, 2.0))
+
+        clean_msg = msg[1:] if (len(msg) > 0 and msg[0] in ["C", "F"]) else msg
             
         if self.log:
-            self.log(f"-> Keying {target}: {msg}")
+            self.log(f"-> Keying {target}: {clean_msg}")
         if self.set_led:
             self.set_led("TX", "red")
         
-        packet = f"{target}{my_address}{msg}"
+        packet = f"{target}{my_address}{clean_msg}"
         
         # 1. Build the mathematical envelope (1 = Tone, 0 = Silence)
         units = []
