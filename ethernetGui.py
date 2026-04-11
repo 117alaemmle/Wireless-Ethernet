@@ -383,9 +383,13 @@ class MarconiNode:
                         self.log(f"[EFTP] Timeout: No ACK from {target} in {current_timeout:.1f}s! Retransmitting (Attempt {retries})...", "error")
                         self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
                         
-                        # THE FIX: Reset the stopwatch and generate a NEW random timeout!
-                        self.unacked_packet["time"] = time.time() 
-                        self.unacked_packet["target_timeout"] = random.uniform(config.EFTP_TIMEOUT_MIN, config.EFTP_TIMEOUT_MAX)
+                        # ========================================================
+                        # Thread Safety Check
+                        # Check if the RX thread cleared the packet while we were busy!
+                        # ========================================================
+                        if self.unacked_packet is not None:
+                            self.unacked_packet["time"] = time.time() 
+                            self.unacked_packet["target_timeout"] = random.uniform(config.EFTP_TIMEOUT_MIN, config.EFTP_TIMEOUT_MAX)
                         
                     time.sleep(0.1)
                     continue # Loop back to the top! Do not pull new main data!
