@@ -369,7 +369,10 @@ class MarconiNode:
                 if self.unacked_packet is not None:
                     elapsed_time = time.time() - self.unacked_packet["time"]
                     
-                    if elapsed_time > 10.0:
+                    # Fetch the randomized timeout (default to 10 if missing)
+                    current_timeout = self.unacked_packet.get("target_timeout", 10.0)
+                    
+                    if elapsed_time > current_timeout:
                         target = self.unacked_packet["target"]
                         msg = self.unacked_packet["msg"]
                         self.unacked_packet["retries"] += 1
@@ -377,9 +380,12 @@ class MarconiNode:
                         seq_hex = self.unacked_packet["seq_hex"]
                         ptype = self.unacked_packet["ptype"]
                         
-                        self.log(f"[EFTP] Timeout: No ACK from {target} in 10s! Retransmitting (Attempt {retries})...", "error")
+                        self.log(f"[EFTP] Timeout: No ACK from {target} in {current_timeout:.1f}s! Retransmitting (Attempt {retries})...", "error")
                         self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
+                        
+                        # THE FIX: Reset the stopwatch and generate a NEW random timeout!
                         self.unacked_packet["time"] = time.time() 
+                        self.unacked_packet["target_timeout"] = random.uniform(7.0, 12.0)
                         
                     time.sleep(0.1)
                     continue # Loop back to the top! Do not pull new main data!
@@ -416,7 +422,8 @@ class MarconiNode:
                             "time": time.time(), 
                             "retries": retries,
                             "seq_hex": seq_hex,
-                            "ptype": ptype 
+                            "ptype": ptype, 
+                            "target_timeout": random.uniform(7.0 , 12.0) #Assign a random timeout for the very first attempt
                         }
 
                 self.tx_queue.task_done()
