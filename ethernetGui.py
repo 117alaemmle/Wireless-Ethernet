@@ -195,6 +195,8 @@ class MarconiNode:
 
         # --- EFTP State Tracker ---
         self.unacked_packet = None
+        self.tx_seq_nums = {} # Tracks the next seq number to SEND to a target
+        self.rx_seq_nums = {} # Tracks the expected seq number to RECEIVE from a source
 
         # Start background threads
         threading.Thread(target=self.receiver_loop, daemon=True).start()
@@ -296,22 +298,18 @@ class MarconiNode:
 
     def on_send(self, event):
         msg = self.entry.get().strip()
-        if len(msg) == 0: 
-            return # Prevent sending empty blank messages
-            
+        if len(msg) == 0: return 
         self.entry.delete(0, tk.END)
-        
-        # Pull the target directly from the dropdown menu's saved state
         target = self.target_var.get()
         
-        self.tx_queue.put((target, msg, "DT"))
+        # Pass None for seq_hex so the daemon knows to generate a new one
+        self.tx_queue.put((target, msg, "DT", None))
         self.log(f"[Queued] -> {target}: {msg}")
 
     def tx_daemon(self):
             while True:
-                target, msg, ptype = self.tx_queue.get()
-                         
-                # Check which protocol the user has selected
+                # Unpack all 4 variables
+                target, msg, ptype, seq_hex = self.tx_queue.get()
                 current_protocol = self.protocol_var.get()
                 
                 if current_protocol == "Marconi (OOK)":
@@ -319,13 +317,21 @@ class MarconiNode:
                 elif current_protocol == "Teletype (FSK)":
                     self.teletype_transmitter.transmit(target, config.MY_ADDRESS, msg)     
                 elif current_protocol == "Wireless Ethernet (CSMA/CA)":
-                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype)
-                    if ptype == "DT": #EFTP acknowledgement stopwatch
+                    
+                    # Generate a new Sequence Number for fresh DATA packets
+                    if ptype == "DT" and seq_hex is None:
+                        seq_int = self.tx_seq_nums.get(target, 0)
+                        seq_hex = f"{seq_int:04x}"
+
+                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
+                    
+                    if ptype == "DT":
                         self.unacked_packet = {
                             "target": target, 
                             "msg": msg, 
                             "time": time.time(), 
-                            "retries": 0
+                            "retries": 0,
+                            "seq_hex": seq_hex # Store the sequence number!
                         }
 
                 self.tx_queue.task_done()
@@ -457,55 +463,53 @@ class MarconiNode:
             # ETHERNET MODE: EFTP PACKET ROUTING & CRC LOGIC 
             # ----------------------------------------------------
             if protocol == "Wireless Ethernet (CSMA/CA)":
-                # Min length: (Dest + Src) + 2 Type + 8 CRC
-                min_len = (config.ADDR_LEN * 2) + 2 + 8
+                # Min length: (Dest + Src) + 2 Type + 4 Seq + 8 CRC = 16
+                min_len = (config.ADDR_LEN * 2) + 2 + 4 + 8
                 if len(data) < min_len: 
                     self.log(f"?? Runt Ethernet Packet: {data}", "error")
                     return
                 
-                # Extract the 2-character packet type
                 ptype_start = config.ADDR_LEN * 2
                 ptype = data[ptype_start : ptype_start + 2]
-                
-                # Payload now starts 2 characters later
-                payload = data[ptype_start + 2 : -8]
+                seq_hex = data[ptype_start + 2 : ptype_start + 6]
+                payload = data[ptype_start + 6 : -8]
                 received_crc = data[-8:]
                 
-                # Verify the 32-bit Frame Check Sequence (Including the packet type!)
-                frame_to_check = f"{dest}{src}{ptype}{payload}".encode()
+                frame_to_check = f"{dest}{src}{ptype}{seq_hex}{payload}".encode()
                 calculated_crc = f"{zlib.crc32(frame_to_check) & 0xFFFFFFFF:08x}"
                 
                 if received_crc != calculated_crc:
                     self.log(f"[CRC FAILED] Received: {received_crc.upper()} != Calculated: {calculated_crc.upper()}", "error")
-                    self.log(f"Hardware dropped corrupted frame from {src}: [{payload}]", "error")
                     return 
                 
-                # Map the 2-letter code to the paper's terminology for logging
                 eftp_types = {"DT": "DATA", "AK": "ACK", "AB": "ABORT", "EN": "END", "ER": "ENDREPLY"}
                 ptype_name = eftp_types.get(ptype, f"UNKNOWN({ptype})")
-                
-                # CRC Passed!
                 msg = payload
+                
                 if dest == config.MY_ADDRESS:
-                    self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
-                    self.log(f"*** FROM {src} [{ptype_name}] ***: {msg}", "received")
-                    
-                    # ====================================================
-                    # EFTP: AUTOMATIC ACKNOWLEDGMENT
-                    # ====================================================
                     if ptype == "DT":
-                        self.log(f"[EFTP] Data received from {src}. Auto-replying with ACK...", "status")
-                        # Enqueue an ACK packet back to the sender! 
-                        # ACKs don't need a message payload, so we send an empty string.
-                        self.tx_queue.put((src, "", "AK"))
-
-                    elif ptype == "AK":
-                        if self.unacked_packet and self.unacked_packet["target"] == src:
-                            self.log(f"[EFTP] ACK received from {src}! Delivery confirmed.", "status")
-                            self.unacked_packet = None # Clear the stopwatch!
+                        seq_int = int(seq_hex, 16)
+                        expected_seq = self.rx_seq_nums.get(src, 0)
                         
+                        if seq_int == expected_seq:
+                            self.log(f"[CRC VERIFIED] Received: {received_crc.upper()} == Calculated: {calculated_crc.upper()}", "status")
+                            self.log(f"*** FROM {src} [{ptype_name} {seq_hex}] ***: {msg}", "received")
+                            self.rx_seq_nums[src] = expected_seq + 1 # Increment expected sequence!
+                        else:
+                            self.log(f"[EFTP] Duplicate DATA packet {seq_hex} received from {src}. Ignoring payload.", "error")
+                            
+                        # ALWAYS auto-reply with an ACK, even for duplicates!
+                        self.log(f"[EFTP] Auto-replying with ACK for {seq_hex}...", "status")
+                        self.tx_queue.put((src, "", "AK", seq_hex))
+                        
+                    elif ptype == "AK":
+                        if self.unacked_packet and self.unacked_packet["target"] == src and self.unacked_packet["seq_hex"] == seq_hex:
+                            self.log(f"[EFTP] ACK {seq_hex} received from {src}! Delivery confirmed.", "status")
+                            self.unacked_packet = None 
+                            self.tx_seq_nums[src] = self.tx_seq_nums.get(src, 0) + 1 # Ready next sequence!
+                            
                 else:
-                    self.log(f"[Sniffed] {src}->{dest} [{ptype_name}]: {msg} (CRC Verified: {received_crc.upper()})", "sniffed")
+                    self.log(f"[Sniffed] {src}->{dest} [{ptype_name} {seq_hex}]: {msg} (CRC Verified)", "sniffed")
 
             # ----------------------------------------------------
             # MARCONI / ALOHA MODE (No Checksums)
@@ -532,8 +536,9 @@ class MarconiNode:
                 
                 self.log(f"[EFTP] Timeout: No ACK from {target} in 4.0s! Retransmitting (Attempt {retries})...", "error")
                 
-                # Re-queue the exact same message for transmission
-                self.tx_queue.put((target, msg, "DT"))
+                # Re-queue the exact same message WITH ITS ORIGINAL SEQUENCE NUMBER
+                self.tx_queue.put((target, msg, "DT", self.unacked_packet["seq_hex"]))
+                self.unacked_packet = None
                 
                 # Clear the tracker so the loop doesn't enqueue multiple copies 
                 # while waiting for the tx_daemon to physically transmit this retry!
