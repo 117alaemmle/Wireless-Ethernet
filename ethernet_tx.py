@@ -14,12 +14,17 @@ class EthernetTransmitter:
         self.set_led = led_callback
         self.is_channel_busy = busy_check_callback 
 
-    def transmit(self, target, my_address, msg, packet_type="DT", seq_hex="0000"):
+    def transmit(self, target, my_address, msg, packet_type="DT", seq_hex="0000", bad_crc=False):
         """Simulates 10BASE5-style Ethernet with CSMA Listen-Before-Talk."""
         
         # Inject the 4-character sequence number after the packet type
         packet_core = f"{target}{my_address}{packet_type}{seq_hex}{msg}"
-        crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
+        
+        if bad_crc:
+            crc32_hex = "DEADBEEF" # Guaranteed to fail the receiver's check
+        else:
+            crc32_hex = f"{zlib.crc32(packet_core.encode()) & 0xFFFFFFFF:08x}"
+        
         packet = packet_core + crc32_hex
    
         # 1. Generate the waveform before checking to see if the channel is clear. This way we can immediately start transmitting once we claim the channel.

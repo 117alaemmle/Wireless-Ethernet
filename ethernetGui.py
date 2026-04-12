@@ -155,6 +155,10 @@ class MarconiNode:
         #Demo Button
         self.demo_btn = tk.Button(protocol_frame, text="Load Demo", command=self.load_demo)
         self.demo_btn.pack(side="left", padx=(0, 10), pady=5)
+
+        #Bad Demo Button
+        self.bad_demo_btn = tk.Button(protocol_frame, text="Bad Demo", command=self.bad_demo)
+        self.bad_demo_btn.pack(side="left", padx=(5, 10), pady=5)
         
         # 2. Audio Controls (Packed to the Right)
         self.audio_mode = tk.StringVar(value="Cinema")
@@ -454,6 +458,16 @@ class MarconiNode:
             self.tx_queue.put((target, f"C{msg}", "DT", None, 0))
             self.log(f"[Queued] -> {target}: {msg}", "queue")
 
+    def bad_demo(self):
+        """Sends a single test message intentionally flagged to have a corrupted CRC."""
+        target = self.target_var.get()
+        msg = "This packet has a terrible, horrible, no good, very bad CRC."
+        self.log(f"[Demo] Queuing intentional CRC failure to {target}...", "status")
+        
+        # We prepend "B" to the message. The tx_daemon will catch this, swap it to "C", 
+        # and set the bad_crc flag for the transmitter!
+        self.tx_queue.put((target, f"B{msg}", "DT", None, 0))
+        self.log(f"[Queued] -> {target}: {msg}", "queue")
 
     def tx_daemon(self):
             while True:
@@ -482,9 +496,10 @@ class MarconiNode:
                         retries = self.unacked_packet["retries"]
                         seq_hex = self.unacked_packet["seq_hex"]
                         ptype = self.unacked_packet["ptype"]
+                        bad_crc = self.unacked_packet.get("bad_crc", False)
                         
                         self.log(f"[EFTP] Timeout: No ACK from {target} in {current_timeout:.1f}s! Retransmitting (Attempt {retries})...", "error")
-                        self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
+                        self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex, bad_crc=bad_crc)
                         
                         # ========================================================
                         # Thread Safety Check
@@ -506,6 +521,11 @@ class MarconiNode:
                     target, msg, ptype, seq_hex, retries = self.tx_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
+
+                bad_crc = False
+                if len(msg) > 0 and msg[0] == "B":
+                    bad_crc = True
+                    msg = "C" + msg[1:] # Convert back to standard Chat port so it logs normally
                     
                 current_protocol = self.protocol_var.get()
                 
@@ -520,7 +540,7 @@ class MarconiNode:
                         seq_hex = f"{seq_int:04x}"
                         self.tx_seq_nums[target] = seq_int + 1
 
-                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex)
+                    self.ethernet_transmitter.transmit(target, config.MY_ADDRESS, msg, packet_type=ptype, seq_hex=seq_hex, bad_crc=bad_crc)
                     
                     if ptype in ["DT", "EN"]:
                         self.unacked_packet = {
@@ -530,7 +550,8 @@ class MarconiNode:
                             "retries": retries,
                             "seq_hex": seq_hex,
                             "ptype": ptype, 
-                            "target_timeout": random.uniform(config.EFTP_TIMEOUT_MIN, config.EFTP_TIMEOUT_MAX) #Assign a random timeout for the very first attempt
+                            "target_timeout": random.uniform(config.EFTP_TIMEOUT_MIN, config.EFTP_TIMEOUT_MAX), #Assign a random timeout for the very first attempt,
+                            "bad_crc": bad_crc
                         }
 
                 self.tx_queue.task_done()
