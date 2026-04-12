@@ -39,23 +39,47 @@ class MarconiNode:
         self.ack_queue = queue.Queue()
 
         ###########################################
-        # --- Indicator Lights Setup ---
+        # --- Header & Indicator Lights Setup ---
         ###########################################
-        indicator_frame = tk.Frame(root)
-        indicator_frame.pack(pady=5)
+        # Create a full-width header frame
+        header_frame = tk.Frame(root)
+        header_frame.pack(fill="x", pady=5)
         
+        # THE FIX: Add uniform="edges" to force columns 0 and 2 to be identical widths.
+        # This guarantees column 1 is mathematically dead-center!
+        header_frame.columnconfigure(0, weight=1, uniform="edges") 
+        header_frame.columnconfigure(1, weight=0) 
+        header_frame.columnconfigure(2, weight=1, uniform="edges") 
 
+        # 1. Put the indicator frame in the dead center (column 1)
+        indicator_frame = tk.Frame(header_frame)
+        indicator_frame.grid(row=0, column=1)
+
+        # ========================================================
+        # THE FIX: Chunky Rectangular Hardware Lights
+        # ========================================================
         # TX Light (Red when sending)
-        tk.Label(indicator_frame, text="TX").pack(side="left", padx=5)
-        self.tx_light = tk.Canvas(indicator_frame, width=20, height=20, bg=root["bg"], highlightthickness=0)
-        self.tx_led = self.tx_light.create_oval(2, 2, 18, 18, fill="gray")
-        self.tx_light.pack(side="left", padx=5)
+        self.tx_light = tk.Canvas(indicator_frame, width=80, height=30, bg=root["bg"], highlightthickness=0)
+        self.tx_led = self.tx_light.create_rectangle(2, 2, 78, 28, fill="gray", outline="black", width=2)
+        self.tx_light.create_text(40, 15, text="TX", fill="white", font=("Arial", 10, "bold"))
+        self.tx_light.pack(side="left", padx=10)
 
-        # RX Light (Green when signal detected)
-        tk.Label(indicator_frame, text="RX").pack(side="left", padx=20)
-        self.rx_light = tk.Canvas(indicator_frame, width=20, height=20, bg=root["bg"], highlightthickness=0)
-        self.rx_led = self.rx_light.create_oval(2, 2, 18, 18, fill="gray")
-        self.rx_light.pack(side="left", padx=5)
+        # RX Light (Green when receiving)
+        self.rx_light = tk.Canvas(indicator_frame, width=80, height=30, bg=root["bg"], highlightthickness=0)
+        self.rx_led = self.rx_light.create_rectangle(2, 2, 78, 28, fill="gray", outline="black", width=2)
+        self.rx_light.create_text(40, 15, text="RX", fill="white", font=("Arial", 10, "bold"))
+        self.rx_light.pack(side="left", padx=10)
+
+        # 2. Put the Stop Button on the far right (column 2)
+        self.stop_btn = tk.Button(
+            header_frame, 
+            text="STOP TRANSMISSION", 
+            command=self.emergency_stop, 
+            bg="red", 
+            fg="white", 
+            font=("Arial", 8, "bold")
+        )
+        self.stop_btn.grid(row=0, column=2, sticky="e", padx=10)
 
         ###########################
         # --- Power Meter Setup ---
@@ -370,6 +394,31 @@ class MarconiNode:
         self.tx_queue.put((target, file_header, "EN", None, 0))
         
         self.log(f"[EFTP] {chunk_count} chunks + [END] queued. Transmission starting...", "status")
+
+    def emergency_stop(self):
+        """Clears all queues and releases the EFTP lock to halt transmission."""
+        self.log("[EMERGENCY STOP] User initiated halt! Clearing queues...", "error")
+        
+        # 1. Empty the Main Data Queue
+        while not self.tx_queue.empty():
+            try:
+                self.tx_queue.get_nowait()
+                self.tx_queue.task_done()
+            except queue.Empty:
+                break
+                
+        # 2. Empty the Express ACK Queue
+        while not self.ack_queue.empty():
+            try:
+                self.ack_queue.get_nowait()
+                self.ack_queue.task_done()
+            except queue.Empty:
+                break
+                
+        # 3. Release the Stop-and-Wait Lock so no retries trigger!
+        self.unacked_packet = None
+        
+        self.log("[EMERGENCY STOP] Queues completely cleared. System idle.", "error")
 
     def load_demo(self):
         """Loads a pre-written script to demonstrate CSMA traffic without typing."""
