@@ -43,6 +43,7 @@ class MarconiNode:
         ###########################################
         indicator_frame = tk.Frame(root)
         indicator_frame.pack(pady=5)
+        
 
         # TX Light (Red when sending)
         tk.Label(indicator_frame, text="TX").pack(side="left", padx=5)
@@ -178,7 +179,7 @@ class MarconiNode:
 
         
         # GUI
-        self.history = scrolledtext.ScrolledText(root, state='disabled', height=20, width=75)
+        self.history = scrolledtext.ScrolledText(root, state='disabled', height=20, width=100)
         self.history.pack(padx=10, pady=10, fill="both", expand=True)
         
         # Create a frame to hold both the dropdown and the text entry
@@ -186,9 +187,10 @@ class MarconiNode:
         input_frame.pack(padx=10, pady=(0, 10), fill="x")
         
         tk.Label(input_frame, text="To:").pack(side="left", padx=(0, 5))
-        
+        default_target = "B" if config.MY_ADDRESS == "A" else "A"
+
         # Target Selection Dropdown
-        self.target_var = tk.StringVar(value="A")
+        self.target_var = tk.StringVar(value=default_target)
         self.target_dropdown = ttk.Combobox(
             input_frame, 
             textvariable=self.target_var, 
