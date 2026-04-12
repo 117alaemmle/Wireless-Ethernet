@@ -21,8 +21,8 @@ def get_node_identity():
     
     # --- MAC ADDRESS DICTIONARY ---
     known_nodes = {
-        "44:fa:66:57:b0:3a": "A",  # Windows 11 Laptop
-        "58:cd:c9:11:b5:94": "B"   # Windows 10 Laptop
+        "44:fa:66:57:b0:3a": "A",  # Framework
+        "34:cf:f6:ae:f3:48": "B"   # Surface
     }
     
     return known_nodes.get(mac_hex, "C")
