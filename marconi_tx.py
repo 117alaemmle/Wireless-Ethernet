@@ -29,8 +29,6 @@ class MarconiTransmitter:
             
         if self.log:
             self.log(f"-> Keying {target}: {clean_msg}", "tx")
-        if self.set_led:
-            self.set_led("TX", "red")
         
         packet = f"{target}{my_address}{clean_msg}"
         
@@ -67,8 +65,8 @@ class MarconiTransmitter:
                 
         rf_wave = carrier * envelope
         
-        # 3. Play PC Audio in a background thread so it doesn't delay the perfect RF math
-        threading.Thread(target=self._play_audio_sync, args=(packet,), daemon=True).start()
+        # 3. Animate the TX light in a background thread
+        threading.Thread(target=self._tx_animator, args=(packet,), daemon=True).start()
         
         # 4. Stream to the SDR Hardware in safe chunks (Bypassing Windows Timers entirely!)
         chunk_size = 131072
@@ -80,11 +78,10 @@ class MarconiTransmitter:
             self.sdr.tx(chunk)
             
         self.sdr.tx_destroy_buffer()
-        if self.set_led:
-            self.set_led("TX", "gray")
 
-    def _play_audio_sync(self, packet):
-        """Plays the PC speaker audio using OS timers, safely separated from the SDR."""
+
+    def _tx_animator(self, packet):
+        """Flashes the TX light perfectly in sync with the physical RF emission."""
         for char in packet.upper():
             code = self.morse_dict.get(char, "")
             if code == '/':
@@ -92,8 +89,19 @@ class MarconiTransmitter:
             else:
                 for sym in code:
                     dur = 1 if sym == '.' else 3
-                    # Play PC Speaker audio using the dynamic GUI setting
-                    marconi_audio.spark_sound(dur, self.unit_time, self.get_audio_mode())
+                    
+                    # Turn light ON for the duration of the tone
+                    if self.set_led:
+                        self.set_led("TX", "red")
                     time.sleep(self.unit_time * dur) 
+                    
+                    # Turn light OFF for the gap
+                    if self.set_led:
+                        self.set_led("TX", "gray")
                     time.sleep(self.unit_time) # Inter-symbol gap
+                    
                 time.sleep(self.unit_time * 2) # Remaining Inter-character gap
+                
+        # Safety catch to ensure it always turns off at the end
+        if self.set_led:
+            self.set_led("TX", "gray")
