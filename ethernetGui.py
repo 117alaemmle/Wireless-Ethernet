@@ -636,8 +636,19 @@ class MarconiNode:
             packet_data = None
             
             if current_protocol == "Marconi (OOK)":
-                new_m_text, packet_done = self.marconi_decoder.process(self.channel_busy)
+                new_m_text, packet_done, new_symbol = self.marconi_decoder.process(self.channel_busy)
                 
+                if new_symbol and not self.is_transmitting:
+                    mode = self.audio_mode.get()
+                    if mode != "Silent":
+                        dur = 1 if new_symbol == "." else 3
+                        # Fire the audio in a background thread so the SDR math never stops!
+                        threading.Thread(
+                            target=marconi_audio.spark_sound, 
+                            args=(dur, config.UNIT_TIME, mode), 
+                            daemon=True
+                        ).start()
+
                 if new_m_text:
                     self.root.after(0, lambda t=new_m_text: self.handle_marconi_live(t))
                     

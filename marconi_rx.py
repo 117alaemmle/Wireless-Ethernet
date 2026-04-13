@@ -20,6 +20,7 @@ class MarconiDecoder:
     def process(self, channel_busy):
         packet_is_done = False
         new_text = ""
+        new_symbol = None # Track freshly finished symbols!
         current_time = time.perf_counter() 
         
         if channel_busy:
@@ -31,7 +32,11 @@ class MarconiDecoder:
             if self.in_pulse:
                 if (current_time - self.last_busy_time) > 0.03:
                     dur = self.last_busy_time - self.p_start
-                    self.symbols += "." if dur < (self.unit_time * 2.0) else "-"
+                    
+                    # Capture the exact symbol we just measured
+                    new_symbol = "." if dur < (self.unit_time * 2.0) else "-"
+                    self.symbols += new_symbol
+                    
                     self.s_start = self.last_busy_time 
                     self.in_pulse = False
             else:
@@ -41,14 +46,14 @@ class MarconiDecoder:
                 if s_dur > (self.unit_time * 2.5) and self.symbols:
                     char = self.reverse_dict.get(self.symbols, "?")
                     self.stream += char
-                    new_text += char  # Catch the new character
+                    new_text += char  
                     self.symbols = ""
                     self.space_added = False 
                     
                 # 2. Word Gap (Space)
                 if s_dur > (self.unit_time * 5.5) and self.stream and not self.space_added:
                     self.stream += " "
-                    new_text += " "   # Catch the space
+                    new_text += " "   
                     self.space_added = True
                     
                 # 3. Packet End
@@ -57,4 +62,5 @@ class MarconiDecoder:
                     self.stream = ""
                     self.space_added = False 
                     
-        return new_text if new_text else None, packet_is_done
+        # Return all 3 variables
+        return new_text if new_text else None, packet_is_done, new_symbol
