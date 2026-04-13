@@ -15,7 +15,7 @@ class EthernetDecoder:
             self.receiving = True
             self.last_busy_time = time.time()
             self.buffer.append(samples)
-            return None
+            return None, None # <--- Return two Nones!
         else:
             if self.receiving:
                 self.buffer.append(samples)
@@ -29,7 +29,7 @@ class EthernetDecoder:
                         self.buffer = []
                         # Pass the threshold to the decoder
                         return self.decode_packet(full_waveform, current_threshold)
-            return None
+            return None, None # <--- Return two Nones!
             
     def decode_packet(self, waveform, current_threshold):
         """Slices the waveform into chips and reassembles the ASCII bytes."""
@@ -46,6 +46,19 @@ class EthernetDecoder:
         
         # 3. Extract the perfectly clean power envelope
         envelope = np.abs(smoothed)
+
+        # ========================================================
+        # Decimate the RF envelope into a 44.1kHz audio track!
+        # ========================================================
+        audio_fs = 44100
+        decimation = max(1, int(self.samp_rate / audio_fs))
+        audio_track = envelope[::decimation].copy() 
+        
+        # Remove DC offset and normalize volume to prevent speaker pops
+        audio_track = audio_track - np.mean(audio_track)
+        max_val = np.max(np.abs(audio_track))
+        if max_val > 0:
+            audio_track = audio_track / max_val
         
         half_unit = self.unit_time / 2.0
         samples_per_chip = int(self.samp_rate * half_unit)
@@ -54,7 +67,7 @@ class EthernetDecoder:
         # Use the 95th percentile to completely ignore massive, split-second static pops
         max_pwr = np.percentile(envelope, 95)
         if max_pwr < current_threshold: 
-            return None 
+            return None, audio_track 
         
         # THE FIX: Lower the absolute threshold to just 20% to act purely as a 
         # squelch for the zero-padded silence at the end of the packet.
@@ -65,7 +78,7 @@ class EthernetDecoder:
         # 5. Find the true Sync Bit
         crossings = np.where(envelope > threshold)[0]
         if len(crossings) == 0:
-            return None
+            return None, audio_track
             
         first_high_idx = None
         for idx in crossings:
@@ -75,7 +88,7 @@ class EthernetDecoder:
                 break
                 
         if first_high_idx is None:
-            return None 
+            return None, audio_track
 
         # 6. ROBUST DATA SLICER
         current_idx = first_high_idx + int(samples_per_chip * 1.5)
@@ -112,4 +125,4 @@ class EthernetDecoder:
             if len(byte) == 8:
                 decoded_text += chr(int(byte, 2))
                 
-        return decoded_text if decoded_text else None
+        return decoded_text if decoded_text else None, audio_track

@@ -6,6 +6,11 @@ import numpy as np  #pip install numpy pyadi-iio
 import adi
 import marconiAudio
 from tkinter import ttk, filedialog  # Required for the Combobox
+try:
+    import sounddevice as sd
+    HAS_SOUNDDEVICE = True
+except ImportError:
+    HAS_SOUNDDEVICE = False
 import teletype_protocol # New module to handle teletype.
 import marconi_rx, marconi_tx, marconi_audio #Play audio tone through PC speakers
 import teletype_rx, teletype_tx
@@ -168,6 +173,12 @@ class MarconiNode:
         for mode in ["Marconi", "Cinema", "Silent"]:
             tk.Radiobutton(audio_frame, text=mode, variable=self.audio_mode, value=mode).pack(side="left", padx=5)
 
+        self.eth_audio_var = tk.StringVar(value="On")
+        eth_audio_frame = tk.LabelFrame(settings_frame, text="Ethernet RF Noise")
+        eth_audio_frame.pack(side="left", fill="x", expand=True, padx=(2, 0))
+        
+        tk.Radiobutton(eth_audio_frame, text="On", variable=self.eth_audio_var, value="On").pack(side="left", padx=5)
+        tk.Radiobutton(eth_audio_frame, text="Off", variable=self.eth_audio_var, value="Off").pack(side="left", padx=5)
 
         self.channel_busy = False
         self.last_rx_state = False  # Tracks previous state to prevent UI flooding
@@ -667,9 +678,27 @@ class MarconiNode:
             elif current_protocol == "Teletype (FSK)":
                 packet_data = self.teletype_decoder.process(samples, self.channel_busy)
             elif current_protocol == "Wireless Ethernet (CSMA/CA)":
-                # Ethernet uses raw samples to calculate the Manchester transitions
-                packet_data = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
+                eth_result = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
+                audio_track = None
                 
+                # Unpack the new tuple from the decoder
+                if isinstance(eth_result, tuple):
+                    packet_data, audio_track = eth_result
+                else:
+                    packet_data = eth_result
+                    
+                # ========================================================
+                # THE FIX: Play the raw RF noise if toggled ON!
+                # ========================================================
+                if audio_track is not None and self.eth_audio_var.get() == "On":
+                    if HAS_SOUNDDEVICE:
+                        # Fire in a background thread so the SDR math never stutters!
+                        threading.Thread(target=lambda: sd.play(audio_track, samplerate=44100), daemon=True).start()
+                    else:
+                        self.root.after(0, lambda: self.log("[Error] Please run 'pip install sounddevice' to hear Ethernet noise.", "error"))
+                        self.root.after(0, lambda: self.eth_audio_var.set("Off"))
+                
+               
             # If either Ethernet or Teletype finished assembling a packet, process it
             if packet_data and current_protocol in ["Wireless Ethernet (CSMA/CA)", "Teletype (FSK)"]:
                 self.parse_fixed_packet(packet_data, current_protocol)
