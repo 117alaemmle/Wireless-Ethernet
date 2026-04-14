@@ -123,38 +123,58 @@ def decode_fsk_packet(samples, samp_rate):
     baud_rate = 45.45
     samples_per_bit = int(samp_rate / baud_rate)
     
-    # 1. Baseband Shift (-98 kHz)
-    t = np.arange(len(samples)) / samp_rate
-    baseband = samples * np.exp(-1j * 2 * np.pi * 98000.0 * t)
-    
-    # 2. BULLETPROOF FM DEMODULATION (Conjugate Delay)
-    # This completely replaces np.unwrap() and np.angle(), making it 
-    # mathematically immune to phase-wrap static spikes!
-    phase_diff = baseband[1:] * np.conjugate(baseband[:-1])
-    inst_freq = np.angle(phase_diff) * (samp_rate / (2.0 * np.pi))
-    
-    # 3. Handle SDR Crystal Drift
-    # We clip wide to safely capture the tones even if the hardware drifted
-    # wildly due to temperature changes.
-    inst_freq = np.clip(inst_freq, -20000.0, 25000.0)
-    
-    # 4. Massive Shock Absorber (The Real Culprit)
-    # We average across 10% of a single bit (~4,400 samples at 2MSPS) to 
-    # perfectly flatten the noise floor while keeping the 170Hz shift sharp!
-    window = int(samples_per_bit * 0.10)
-    inst_freq = np.convolve(inst_freq, np.ones(window)/window, mode='same')
-
-    # 5. Calibrate the exact Mark frequency
+    # =========================================================================
+    # 1. DYNAMIC FFT CALIBRATION
+    # =========================================================================
+    # The first part of the packet is a pure Mark warmup tone.
+    # We use an FFT to find the EXACT frequency the hardware drifted to!
     start_cal = int(samp_rate * 0.05)
     end_cal = int(samp_rate * 0.20)
-    if len(inst_freq) > end_cal:
-        measured_mark = np.median(inst_freq[start_cal:end_cal])
-    else:
-        measured_mark = 2000.0
+    
+    if len(samples) < end_cal:
+        return "" # Runt packet, ignore
         
-    dynamic_boundary = measured_mark + 85.0
-    is_mark = inst_freq < dynamic_boundary
-
+    warmup = samples[start_cal:end_cal]
+    warmup = warmup - np.mean(warmup) # Clear DC for a clean FFT
+    
+    fft_vals = np.abs(np.fft.fft(warmup))
+    freqs = np.fft.fftfreq(len(warmup), 1.0/samp_rate)
+    
+    # Look for the peak between 50kHz and 150kHz
+    search_band = (freqs > 50000.0) & (freqs < 150000.0)
+    valid_freqs = freqs[search_band]
+    valid_ffts = fft_vals[search_band]
+    
+    if len(valid_ffts) == 0:
+        return ""
+        
+    measured_mark = valid_freqs[np.argmax(valid_ffts)]
+    measured_space = measured_mark + 170.0 # Space is physically tied to +170 Hz
+    
+    # =========================================================================
+    # 2. DUAL-FILTER NON-COHERENT AM DEMODULATION
+    # =========================================================================
+    t = np.arange(len(samples)) / samp_rate
+    
+    # Shift both tones down to exactly 0 Hz
+    mark_baseband = samples * np.exp(-1j * 2 * np.pi * measured_mark * t)
+    space_baseband = samples * np.exp(-1j * 2 * np.pi * measured_space * t)
+    
+    # Razor-tight Low Pass Filter. 
+    # A moving average of exactly 1/170th of a second perfectly destroys 
+    # the crosstalk between the Mark and Space channels!
+    filter_len = int(samp_rate / 170.0) 
+    filter_kernel = np.ones(filter_len) / filter_len
+    
+    mark_filtered = np.convolve(mark_baseband, filter_kernel, mode='same')
+    space_filtered = np.convolve(space_baseband, filter_kernel, mode='same')
+    
+    # 3. COMPARE MAGNITUDES (Which tone is louder?)
+    is_mark = np.abs(mark_filtered) > np.abs(space_filtered)
+    
+    # =========================================================================
+    # 4. DECODE THE BITSTREAM
+    # =========================================================================
     decoded_text = ""
     current_state = 'LTRS' 
     
@@ -185,9 +205,7 @@ def decode_fsk_packet(samples, samp_rate):
                     current_state = 'FIGS'
                 elif bits == SPACE_CHAR:
                     decoded_text += ' '
-                elif bits == CR_CHAR or bits == LF_CHAR:
-                    pass 
-                elif bits == NULL_CHAR:
+                elif bits == CR_CHAR or bits == LF_CHAR or bits == NULL_CHAR:
                     pass 
                 else:
                     if current_state == 'LTRS':
