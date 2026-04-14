@@ -1,5 +1,6 @@
 import numpy as np
 import teletype_protocol
+import time
 
 class TeletypeTransmitter:
     def __init__(self, sdr, samp_rate, log_callback, led_callback):
