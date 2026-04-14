@@ -14,38 +14,39 @@ class TeletypeTransmitter:
         """Encodes and streams an FSK message to the ADALM-PLUTO hardware."""
         packet = f"{target}{my_address}{msg}"
         
-        # Trigger the GUI updates
         if self.log:
             self.log(f"-> Tele-Typing {target}: {msg}")
         if self.set_led:
             self.set_led("TX", "red")
             
-        # 1. Generate the entire continuous math wave
+        # 1. Generate the continuous math wave
         samples, _ = teletype_protocol.generate_fsk_signal(packet, self.samp_rate)
         
         # ========================================================
-        # THE FIX: Gapless Transmission (The Ethernet Method)
-        # Destroy old buffers and dynamically push the entire array
-        # at once to guarantee mathematically perfect phase continuity!
+        # THE FIX: Safe Chunking
+        # We use a 1 Mega-Sample chunk (about 0.5 seconds of audio).
+        # This prevents Errno -27 (RAM Overflow) on long messages!
         # ========================================================
+        chunk_size = 1048576 
+        
         try:
             self.sdr.tx_destroy_buffer()
         except Exception:
             pass
             
-        # Dynamically allocate the SDR buffer to swallow the entire FSK wave
-        self.sdr.tx_buffer_size = len(samples)
+        self.sdr.tx_buffer_size = chunk_size
         
-        # Fire it in one solid, uninterrupted beam
-        self.sdr.tx(samples)
-        
-        # Manually wait for the radio to physically finish playing
-        tx_duration = len(samples) / self.samp_rate
-        time.sleep(tx_duration)
+        for i in range(0, len(samples), chunk_size):
+            chunk = samples[i:i+chunk_size]
             
-        # Clean up the hardware buffer after the stream finishes
+            # Pad the final chunk so the buffer size remains perfectly static
+            if len(chunk) < chunk_size:
+                pad = np.zeros(chunk_size - len(chunk), dtype=np.complex128)
+                chunk = np.concatenate((chunk, pad))
+                
+            self.sdr.tx(chunk)
+            
         self.sdr.tx_destroy_buffer()
         
-        # Turn off the GUI light
         if self.set_led:
             self.set_led("TX", "gray")

@@ -122,55 +122,40 @@ def decode_fsk_packet(samples, samp_rate):
     """
     baud_rate = 45.45
     samples_per_bit = int(samp_rate / baud_rate)
-
-    # The SDR has a massive 0 Hz spike. If we don't center the signal on the 
-    # origin (0,0), np.angle() will just wobble instead of spinning 360 degrees,
-    # completely destroying the FM demodulation math!
-    samples = samples - np.mean(samples)
     
-    # DSP Math: Extract Instantaneous Frequency
-    phase = np.unwrap(np.angle(samples))
+    # =========================================================================
+    # THE NEW FIX: BASEBAND SHIFTING
+    # =========================================================================
+    # 1. Shift the 100 kHz Mark tone down to exactly 0 Hz. 
+    # This automatically pushes the Space tone to 170 Hz, and throws the 
+    # destructive 0 Hz LO Leakage down to -100,000 Hz!
+    t = np.arange(len(samples)) / samp_rate
+    baseband = samples * np.exp(-1j * 2 * np.pi * 100000.0 * t)
+    
+    # 2. Low-Pass Filter: A window of 20 perfectly averages 1 cycle of the 
+    # -100 kHz LO leakage at 2MSPS, mathematically destroying the interference!
+    window = max(1, int(samp_rate / 100000.0))
+    smoothed = np.convolve(baseband, np.ones(window)/window, mode='same')
+    
+    # 3. DSP Math: Extract Instantaneous Frequency
+    phase = np.unwrap(np.angle(smoothed))
     inst_freq = np.diff(phase) * (samp_rate / (2.0 * np.pi))
     
-    # =========================================================================
-    # 
-    # =========================================================================
-    # Multipath fading and USB dropouts cause massive phase-calculation spikes.
-    # We clip the frequencies to a safe, realistic audio range (1500 Hz to 3000 Hz)
-    # BEFORE running the moving average. This prevents a 1-microsecond static pop 
-    # from smearing across and destroying a whole Baudot bit!
-    #inst_freq = np.clip(inst_freq, 1500.0, 3000.0)
-
-    # The previous 1500-3000 Hz clipper was too narrow for two different SDRs. 
-    # A tiny 2.5 PPM crystal drift at 433 MHz shifts the audio by +/- 1000 Hz, 
-    # pushing the FSK tones outside the clipper and destroying the math. 
-    # We widen this to +/- 10000 Hz. This still safely blocks the massive 
-    # 500,000 Hz static phase-wrap spikes, but gives the SDR hardware 
-    # infinite room to drift!
-    inst_freq = np.clip(inst_freq, 50000.0, 150000.0)
+    # 4. Clip the extreme phase wrap spikes. Since our data is now strictly 
+    # between 0 Hz and 170 Hz, we can violently clip out the SDR static!
+    inst_freq = np.clip(inst_freq, -500.0, 1000.0)
     
-    
-    # Moving Average Filter: Acts as a shock absorber to smooth out SDR static
-    window = 50
-    inst_freq = np.convolve(inst_freq, np.ones(window)/window, mode='same')
-    
-    # Decision Boundary: 2210 Hz is exactly halfway between Mark and Space
-    #is_mark = inst_freq < 2210.0 #Due to using antennas, the signal occasionally decodes incorrectly. Attempting to use a dynamic decision boundary instead.
+    # A second gentle smoothing filter to clean up the FSK transitions
+    window2 = 50
+    inst_freq = np.convolve(inst_freq, np.ones(window2)/window2, mode='same')
 
     # =========================================================================
     # THE FIX: CALIBRATE USING THE WARMUP TONE BEACON
     # =========================================================================
-    # We know the first 30 bits (~660,000 samples) are a pure "Mark" idle tone.
-    # We will measure the median frequency of this specific tone, skipping the 
-    # first 100,000 samples to safely ignore the hardware turn-on pop.
-    
     if len(inst_freq) > 500000:
-        # np.median ignores random static spikes much better than np.mean
         measured_mark = np.median(inst_freq[100000:500000])
     else:
-        # Fallback if the file is strangely short
-        #measured_mark = 2125.0 #Old frequency
-        measured_mark = 100000.0
+        measured_mark = 0.0 # Our baseband shift guarantees Mark is near 0 Hz!
         
     # The Space tone is historically exactly 170 Hz higher than the Mark tone.
     # We set our decision line exactly in the middle (+85 Hz).
