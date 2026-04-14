@@ -121,71 +121,113 @@ def decode_fsk_packet(samples, samp_rate):
     and decodes the ITA2 bits while tracking the mechanical shift state.
     """
     baud_rate = 45.45
-    samples_per_bit = int(samp_rate / baud_rate)
-    
-    # DSP Math: Extract Instantaneous Frequency
-    phase = np.unwrap(np.angle(samples))
-    inst_freq = np.diff(phase) * (samp_rate / (2.0 * np.pi))
     
     # =========================================================================
-    # 
+    # 1. BASEBAND SHIFT & THE ALIASING TRAP DEFEATER
     # =========================================================================
-    # Multipath fading and USB dropouts cause massive phase-calculation spikes.
-    # We clip the frequencies to a safe, realistic audio range (1500 Hz to 3000 Hz)
-    # BEFORE running the moving average. This prevents a 1-microsecond static pop 
-    # from smearing across and destroying a whole Baudot bit!
-    #inst_freq = np.clip(inst_freq, 1500.0, 3000.0)
-
-    # The previous 1500-3000 Hz clipper was too narrow for two different SDRs. 
-    # A tiny 2.5 PPM crystal drift at 433 MHz shifts the audio by +/- 1000 Hz, 
-    # pushing the FSK tones outside the clipper and destroying the math. 
-    # We widen this to +/- 10000 Hz. This still safely blocks the massive 
-    # 500,000 Hz static phase-wrap spikes, but gives the SDR hardware 
-    # infinite room to drift!
-    inst_freq = np.clip(inst_freq, 50000.0, 150000.0)
+    # We shift Mark (100kHz) precisely to 0 Hz.
+    # The destructive LO Leakage (0 Hz) is pushed to -100,000 Hz.
+    t = np.arange(len(samples)) / samp_rate
+    baseband = samples * np.exp(-1j * 2 * np.pi * 100000.0 * t)
     
+    # We decimate by 45. The new sample rate is 44,444 Hz.
+    # At this specific rate, the -100kHz LO leakage aliases to -11,111 Hz,
+    # safely missing our 0 Hz Mark tone by miles!
+    decimation = 45
+    new_samp_rate = samp_rate / decimation
     
-    # Moving Average Filter: Acts as a shock absorber to smooth out SDR static
-    window = 50
-    inst_freq = np.convolve(inst_freq, np.ones(window)/window, mode='same')
+    trim_len = len(baseband) - (len(baseband) % decimation)
+    downsampled = baseband[:trim_len].reshape(-1, decimation).mean(axis=1)
     
-    # Decision Boundary: 2210 Hz is exactly halfway between Mark and Space
-    #is_mark = inst_freq < 2210.0 #Due to using antennas, the signal occasionally decodes incorrectly. Attempting to use a dynamic decision boundary instead.
-
+    samples_per_bit = int(new_samp_rate / baud_rate)
+    
     # =========================================================================
-    # THE FIX: CALIBRATE USING THE WARMUP TONE BEACON
+    # 2. DYNAMIC FFT CALIBRATION
     # =========================================================================
-    # We know the first 30 bits (~660,000 samples) are a pure "Mark" idle tone.
-    # We will measure the median frequency of this specific tone, skipping the 
-    # first 100,000 samples to safely ignore the hardware turn-on pop.
+    start_cal = int(new_samp_rate * 0.05)
+    end_cal = int(new_samp_rate * 0.20)
     
-    if len(inst_freq) > 500000:
-        # np.median ignores random static spikes much better than np.mean
-        measured_mark = np.median(inst_freq[100000:500000])
-    else:
-        # Fallback if the file is strangely short
-        #measured_mark = 2125.0 #Old frequency
-        measured_mark = 100000.0
+    if len(downsampled) < end_cal:
+        return "", None
         
-    # The Space tone is historically exactly 170 Hz higher than the Mark tone.
-    # We set our decision line exactly in the middle (+85 Hz).
-    dynamic_boundary = measured_mark + 85.0
+    warmup = downsampled[start_cal:end_cal]
     
-    # Mark is the lower frequency tone
-    is_mark = inst_freq < dynamic_boundary
+    # Find the EXACT frequency the Mark tone drifted to (should be near 0 Hz)
+    fft_vals = np.abs(np.fft.fft(warmup))
+    freqs = np.fft.fftfreq(len(warmup), 1.0/new_samp_rate)
+    
+    search_band = (freqs > -5000.0) & (freqs < 5000.0)
+    valid_freqs = freqs[search_band]
+    valid_ffts = fft_vals[search_band]
+    
+    if len(valid_ffts) == 0:
+        return "", None
+        
+    measured_mark = valid_freqs[np.argmax(valid_ffts)]
+    measured_space = measured_mark + 170.0 
+    
+    # =========================================================================
+    # 3. HIGH-SPEED MAGNITUDE (AM) DEMODULATION
+    # =========================================================================
+    t_new = np.arange(len(downsampled)) / new_samp_rate
+    
+    # Separate the tones to exactly DC (0 Hz)
+    mark_baseband = downsampled * np.exp(-1j * 2 * np.pi * measured_mark * t_new)
+    space_baseband = downsampled * np.exp(-1j * 2 * np.pi * measured_space * t_new)
+    
+    # A moving average of exactly 1/170th of a second perfectly deletes
+    # the crosstalk between the Mark and Space channels!
+    filter_len = max(1, int(new_samp_rate / 170.0)) 
+    filter_kernel = np.ones(filter_len) / filter_len
+    
+    mark_filtered = np.convolve(mark_baseband, filter_kernel, mode='same')
+    space_filtered = np.convolve(space_baseband, filter_kernel, mode='same')
+    
+    # Which tone is louder? (Completely immune to phase/frequency static!)
+    is_mark = np.abs(mark_filtered) > np.abs(space_filtered)
 
+    # =========================================================================
+    # THE NEW FIX: INTERNAL DSP SQUELCH (Anti-Hallucination)
+    # =========================================================================
+    # Measure the total volume of the audio at every point in time
+    envelope = np.abs(mark_filtered) + np.abs(space_filtered)
+    
+    # The warmup tone (start_cal to end_cal) gives us the exact baseline volume
+    baseline_amp = np.median(envelope[start_cal:end_cal])
+    
+    # If the volume drops below 15% of the baseline, the transmitter is physically
+    # turned off. It is dead air. We force the line to 'Mark' (Idle) so it 
+    # cannot hallucinate any fake Start Bits from the background static!
+    squelch_threshold = baseline_amp * 0.15
+    is_mark[envelope < squelch_threshold] = True
+
+    # =========================================================================
+    # THE FIX: GENERATE AUTHENTIC RTTY AUDIO
+    # =========================================================================
+    # We shift the 0 Hz baseband up to 2125 Hz (The historical Amateur Radio RTTY Mark Tone!)
+    t_audio = np.arange(len(downsampled)) / new_samp_rate
+    audio_complex = downsampled * np.exp(1j * 2 * np.pi * 2125.0 * t_audio)
+    audio_track = np.real(audio_complex) # Extract the physical sound wave
+    
+    # Normalize volume to prevent speaker pops
+    audio_track = audio_track - np.mean(audio_track)
+    max_val = np.max(np.abs(audio_track))
+    if max_val > 0:
+        audio_track = audio_track / max_val
+
+    
+    # =========================================================================
+    # 4. DECODE
+    # =========================================================================
     decoded_text = ""
     current_state = 'LTRS' 
     
     idx = 1
     total_samples = len(is_mark)
     
-    # Scan the entire radio wave packet
     while idx < total_samples - (samples_per_bit * 8): 
-        # Detect a Falling Edge (Transition from Mark to Space) -> START BIT!
         if not is_mark[idx] and is_mark[idx - 1]:
-            
-            # Jump 1.5 bits forward to land exactly in the center of Data Bit 1
+            # START BIT FOUND
             bit_idx = idx + int(1.5 * samples_per_bit)
             bits = ""
             for _ in range(5): 
@@ -193,35 +235,29 @@ def decode_fsk_packet(samples, samp_rate):
                 bits += '1' if is_mark[bit_idx] else '0'
                 bit_idx += samples_per_bit 
                 
-            # Verify the Stop Bit (Must be a Mark)
             stop_idx = bit_idx
             if stop_idx < total_samples and is_mark[stop_idx]:
-                
-                # --- Mechanical State Machine Router ---
                 if bits == LTRS_SHIFT:
                     current_state = 'LTRS'
                 elif bits == FIGS_SHIFT:
                     current_state = 'FIGS'
                 elif bits == SPACE_CHAR:
                     decoded_text += ' '
-                elif bits == CR_CHAR or bits == LF_CHAR:
-                    pass # We ignore CR/LF for this specific one-line GUI parser
-                elif bits == NULL_CHAR:
-                    pass # Ignore blank tape
+                elif bits == CR_CHAR or bits == LF_CHAR or bits == NULL_CHAR:
+                    pass 
                 else:
                     if current_state == 'LTRS':
                         decoded_text += BITS_TO_LTRS.get(bits, '?')
                     else:
                         decoded_text += BITS_TO_FIGS.get(bits, '?')
                 
-                # Jump forward to resume hunting after the stop bit
                 idx = stop_idx + int(0.5 * samples_per_bit)
             else:
-                idx += 1 # False alarm, keep hunting
+                idx += 1 
         else:
             idx += 1
             
-    return decoded_text.strip()
+    return decoded_text.strip(), audio_track
 
 """ How This Engineering Works
 

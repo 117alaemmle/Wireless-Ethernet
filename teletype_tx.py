@@ -1,5 +1,6 @@
 import numpy as np
 import teletype_protocol
+import time
 
 class TeletypeTransmitter:
     def __init__(self, sdr, samp_rate, log_callback, led_callback):
@@ -11,35 +12,51 @@ class TeletypeTransmitter:
 
     def transmit(self, target, my_address, msg):
         """Encodes and streams an FSK message to the ADALM-PLUTO hardware."""
+
+        # ========================================================
+        # THE FIX: Strip the routing port before doing anything else!
+        # This saves ~165ms of physical airtime per packet.
+        # ========================================================
+        if len(msg) > 0 and msg[0] in ["C", "F", "B"]:
+            msg = msg[1:]
+
         packet = f"{target}{my_address}{msg}"
         
-        # Trigger the GUI updates
         if self.log:
             self.log(f"-> Tele-Typing {target}: {msg}")
         if self.set_led:
             self.set_led("TX", "red")
             
-        # 1. Generate the entire continuous math wave
         samples, _ = teletype_protocol.generate_fsk_signal(packet, self.samp_rate)
         
-        # 2. Break it into hardware-safe 131ms chunks to prevent RAM allocation crashes
-        chunk_size = 131072 
+        chunk_size = 1048576 
+        
+        try:
+            self.sdr.tx_destroy_buffer()
+        except Exception:
+            pass
+            
+        self.sdr.tx_buffer_size = chunk_size
         
         for i in range(0, len(samples), chunk_size):
             chunk = samples[i:i+chunk_size]
             
-            # If it's the final chunk, pad it with zeros to keep the buffer size identical.
-            # This forces the driver to reuse the same memory address, eliminating RF gaps.
             if len(chunk) < chunk_size:
                 pad = np.zeros(chunk_size - len(chunk), dtype=np.complex128)
                 chunk = np.concatenate((chunk, pad))
                 
-            # Push to the radio (Blocking call acts as a hardware metronome)
             self.sdr.tx(chunk)
             
-        # Clean up the hardware buffer after the stream finishes
+        # ========================================================
+        # THE FIX: DMA Queue Drain Time
+        # The SDR kernel holds up to 4 buffers in memory. If we 
+        # destroy the buffer instantly, it deletes the last 2 seconds 
+        # of audio! We must sleep to let the hardware finish radiating.
+        # ========================================================
+        drain_time = (chunk_size / self.samp_rate) * 4
+        time.sleep(drain_time)
+            
         self.sdr.tx_destroy_buffer()
         
-        # Turn off the GUI light
         if self.set_led:
             self.set_led("TX", "gray")
