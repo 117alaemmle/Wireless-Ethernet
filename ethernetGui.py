@@ -152,7 +152,7 @@ class MarconiNode:
         self.protocol_dropdown = ttk.Combobox(
             protocol_frame, 
             textvariable=self.protocol_var, 
-            values=["Marconi (OOK)", "Wireless Ethernet (CSMA/CA)"], 
+            values=["Marconi (OOK)", "Teletype (FSK)", "Wireless Ethernet (CSMA/CA)"], 
             state="readonly"
         )
         self.protocol_dropdown.pack(padx=10, pady=5, side="left")
