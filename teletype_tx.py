@@ -22,20 +22,25 @@ class TeletypeTransmitter:
         # 1. Generate the entire continuous math wave
         samples, _ = teletype_protocol.generate_fsk_signal(packet, self.samp_rate)
         
-        # 2. Break it into hardware-safe 131ms chunks to prevent RAM allocation crashes
-        chunk_size = 131072 
-        
-        for i in range(0, len(samples), chunk_size):
-            chunk = samples[i:i+chunk_size]
+        # ========================================================
+        # THE FIX: Gapless Transmission (The Ethernet Method)
+        # Destroy old buffers and dynamically push the entire array
+        # at once to guarantee mathematically perfect phase continuity!
+        # ========================================================
+        try:
+            self.sdr.tx_destroy_buffer()
+        except Exception:
+            pass
             
-            # If it's the final chunk, pad it with zeros to keep the buffer size identical.
-            # This forces the driver to reuse the same memory address, eliminating RF gaps.
-            if len(chunk) < chunk_size:
-                pad = np.zeros(chunk_size - len(chunk), dtype=np.complex128)
-                chunk = np.concatenate((chunk, pad))
-                
-            # Push to the radio (Blocking call acts as a hardware metronome)
-            self.sdr.tx(chunk)
+        # Dynamically allocate the SDR buffer to swallow the entire FSK wave
+        self.sdr.tx_buffer_size = len(samples)
+        
+        # Fire it in one solid, uninterrupted beam
+        self.sdr.tx(samples)
+        
+        # Manually wait for the radio to physically finish playing
+        tx_duration = len(samples) / self.samp_rate
+        time.sleep(tx_duration)
             
         # Clean up the hardware buffer after the stream finishes
         self.sdr.tx_destroy_buffer()
