@@ -122,47 +122,73 @@ def decode_fsk_packet(samples, samp_rate):
     """
     baud_rate = 45.45
     
-    # 1. Baseband Shift (-98 kHz)
+    # =========================================================================
+    # 1. BASEBAND SHIFT & THE ALIASING TRAP DEFEATER
+    # =========================================================================
+    # We shift Mark (100kHz) precisely to 0 Hz.
+    # The destructive LO Leakage (0 Hz) is pushed to -100,000 Hz.
     t = np.arange(len(samples)) / samp_rate
-    baseband = samples * np.exp(-1j * 2 * np.pi * 98000.0 * t)
+    baseband = samples * np.exp(-1j * 2 * np.pi * 100000.0 * t)
     
-    # =========================================================================
-    # 2. DECIMATION (The Speed Fix!)
-    # =========================================================================
-    # Average every 100 samples to safely down-sample from 2MSPS to 20kSPS.
-    # This makes the math 100x faster so the receiver never misses a packet!
-    decimation = 100
+    # We decimate by 45. The new sample rate is 44,444 Hz.
+    # At this specific rate, the -100kHz LO leakage aliases to -11,111 Hz,
+    # safely missing our 0 Hz Mark tone by miles!
+    decimation = 45
     new_samp_rate = samp_rate / decimation
     
-    # Trim the tail to make it cleanly divisible, then reshape-mean to decimate
     trim_len = len(baseband) - (len(baseband) % decimation)
-    baseband = baseband[:trim_len]
-    downsampled = baseband.reshape(-1, decimation).mean(axis=1)
+    downsampled = baseband[:trim_len].reshape(-1, decimation).mean(axis=1)
     
     samples_per_bit = int(new_samp_rate / baud_rate)
     
-    # 3. CONJUGATE DELAY DEMODULATION
-    # Because we are down to 20kSPS, this math executes in milliseconds!
-    phase_diff = downsampled[1:] * np.conjugate(downsampled[:-1])
-    inst_freq = np.angle(phase_diff) * (new_samp_rate / (2.0 * np.pi))
-    
-    # 4. SHOCK ABSORBER
-    # Average across 20% of a bit length to completely flatten the remaining noise
-    window = int(samples_per_bit * 0.20)
-    inst_freq = np.convolve(inst_freq, np.ones(window)/window, mode='same')
-    
-    # 5. DYNAMIC CALIBRATION
+    # =========================================================================
+    # 2. DYNAMIC FFT CALIBRATION
+    # =========================================================================
     start_cal = int(new_samp_rate * 0.05)
     end_cal = int(new_samp_rate * 0.20)
-    if len(inst_freq) > end_cal:
-        measured_mark = np.median(inst_freq[start_cal:end_cal])
-    else:
-        measured_mark = 2000.0
-        
-    dynamic_boundary = measured_mark + 85.0
-    is_mark = inst_freq < dynamic_boundary
     
-    # 6. DECODE
+    if len(downsampled) < end_cal:
+        return ""
+        
+    warmup = downsampled[start_cal:end_cal]
+    
+    # Find the EXACT frequency the Mark tone drifted to (should be near 0 Hz)
+    fft_vals = np.abs(np.fft.fft(warmup))
+    freqs = np.fft.fftfreq(len(warmup), 1.0/new_samp_rate)
+    
+    search_band = (freqs > -5000.0) & (freqs < 5000.0)
+    valid_freqs = freqs[search_band]
+    valid_ffts = fft_vals[search_band]
+    
+    if len(valid_ffts) == 0:
+        return ""
+        
+    measured_mark = valid_freqs[np.argmax(valid_ffts)]
+    measured_space = measured_mark + 170.0 
+    
+    # =========================================================================
+    # 3. HIGH-SPEED MAGNITUDE (AM) DEMODULATION
+    # =========================================================================
+    t_new = np.arange(len(downsampled)) / new_samp_rate
+    
+    # Separate the tones to exactly DC (0 Hz)
+    mark_baseband = downsampled * np.exp(-1j * 2 * np.pi * measured_mark * t_new)
+    space_baseband = downsampled * np.exp(-1j * 2 * np.pi * measured_space * t_new)
+    
+    # A moving average of exactly 1/170th of a second perfectly deletes
+    # the crosstalk between the Mark and Space channels!
+    filter_len = max(1, int(new_samp_rate / 170.0)) 
+    filter_kernel = np.ones(filter_len) / filter_len
+    
+    mark_filtered = np.convolve(mark_baseband, filter_kernel, mode='same')
+    space_filtered = np.convolve(space_baseband, filter_kernel, mode='same')
+    
+    # Which tone is louder? (Completely immune to phase/frequency static!)
+    is_mark = np.abs(mark_filtered) > np.abs(space_filtered)
+    
+    # =========================================================================
+    # 4. DECODE
+    # =========================================================================
     decoded_text = ""
     current_state = 'LTRS' 
     
@@ -172,14 +198,14 @@ def decode_fsk_packet(samples, samp_rate):
     while idx < total_samples - (samples_per_bit * 8): 
         if not is_mark[idx] and is_mark[idx - 1]:
             # START BIT FOUND
-            bit_idx = idx + (1.5 * samples_per_bit)
+            bit_idx = idx + int(1.5 * samples_per_bit)
             bits = ""
             for _ in range(5): 
                 if bit_idx >= total_samples: break
-                bits += '1' if is_mark[int(bit_idx)] else '0'
+                bits += '1' if is_mark[bit_idx] else '0'
                 bit_idx += samples_per_bit 
                 
-            stop_idx = int(bit_idx)
+            stop_idx = bit_idx
             if stop_idx < total_samples and is_mark[stop_idx]:
                 if bits == LTRS_SHIFT:
                     current_state = 'LTRS'
