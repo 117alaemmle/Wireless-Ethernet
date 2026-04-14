@@ -148,7 +148,7 @@ def decode_fsk_packet(samples, samp_rate):
     end_cal = int(new_samp_rate * 0.20)
     
     if len(downsampled) < end_cal:
-        return ""
+        return "", None
         
     warmup = downsampled[start_cal:end_cal]
     
@@ -161,7 +161,7 @@ def decode_fsk_packet(samples, samp_rate):
     valid_ffts = fft_vals[search_band]
     
     if len(valid_ffts) == 0:
-        return ""
+        return "", None
         
     measured_mark = valid_freqs[np.argmax(valid_ffts)]
     measured_space = measured_mark + 170.0 
@@ -200,6 +200,21 @@ def decode_fsk_packet(samples, samp_rate):
     # cannot hallucinate any fake Start Bits from the background static!
     squelch_threshold = baseline_amp * 0.15
     is_mark[envelope < squelch_threshold] = True
+
+    # =========================================================================
+    # THE FIX: GENERATE AUTHENTIC RTTY AUDIO
+    # =========================================================================
+    # We shift the 0 Hz baseband up to 2125 Hz (The historical Amateur Radio RTTY Mark Tone!)
+    t_audio = np.arange(len(downsampled)) / new_samp_rate
+    audio_complex = downsampled * np.exp(1j * 2 * np.pi * 2125.0 * t_audio)
+    audio_track = np.real(audio_complex) # Extract the physical sound wave
+    
+    # Normalize volume to prevent speaker pops
+    audio_track = audio_track - np.mean(audio_track)
+    max_val = np.max(np.abs(audio_track))
+    if max_val > 0:
+        audio_track = audio_track / max_val
+
     
     # =========================================================================
     # 4. DECODE
@@ -242,7 +257,7 @@ def decode_fsk_packet(samples, samp_rate):
         else:
             idx += 1
             
-    return decoded_text.strip()
+    return decoded_text.strip(), audio_track
 
 """ How This Engineering Works
 

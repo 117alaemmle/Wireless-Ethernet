@@ -174,7 +174,7 @@ class MarconiNode:
             tk.Radiobutton(audio_frame, text=mode, variable=self.audio_mode, value=mode).pack(side="left", padx=5)
 
         self.eth_audio_var = tk.StringVar(value="On")
-        eth_audio_frame = tk.LabelFrame(settings_frame, text="Ethernet RF Noise")
+        eth_audio_frame = tk.LabelFrame(settings_frame, text="Teletype/Ethernet Noise")
         eth_audio_frame.pack(side="left", fill="x", expand=True, padx=(2, 0))
         
         tk.Radiobutton(eth_audio_frame, text="On", variable=self.eth_audio_var, value="On").pack(side="left", padx=5)
@@ -676,7 +676,26 @@ class MarconiNode:
                     self.m_header_printed = False
 
             elif current_protocol == "Teletype (FSK)":
-                packet_data = self.teletype_decoder.process(samples, self.channel_busy)
+                tt_result = self.teletype_decoder.process(samples, self.channel_busy)
+                audio_track = None
+                
+                # Unpack the new tuple from the decoder
+                if isinstance(tt_result, tuple):
+                    packet_data, audio_track = tt_result
+                else:
+                    packet_data = tt_result
+                    
+                # ========================================================
+                # THE FIX: Play the RTTY warble if toggled ON!
+                # ========================================================
+                if audio_track is not None and self.eth_audio_var.get() == "On":
+                    if HAS_SOUNDDEVICE:
+                        # Our Teletype decimation factor is exactly 45
+                        tt_fs = int(config.SAMP_RATE / 45) 
+                        threading.Thread(target=lambda: sd.play(audio_track, samplerate=tt_fs), daemon=True).start()
+                    else:
+                        self.root.after(0, lambda: self.log("[Error] Please run 'pip install sounddevice' to hear Teletype noise.", "error"))
+                        self.root.after(0, lambda: self.eth_audio_var.set("Off"))
             elif current_protocol == "Wireless Ethernet (CSMA/CA)":
                 eth_result = self.ethernet_decoder.process(samples, self.channel_busy, self.current_threshold)
                 audio_track = None
