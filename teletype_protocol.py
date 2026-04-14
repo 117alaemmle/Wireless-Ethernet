@@ -123,41 +123,36 @@ def decode_fsk_packet(samples, samp_rate):
     baud_rate = 45.45
     samples_per_bit = int(samp_rate / baud_rate)
     
-    # =========================================================================
-    # THE NEW FIX: OFFSET BASEBAND SHIFTING
-    # =========================================================================
-    # Shift down by 98 kHz. This pushes the 0 Hz LO leakage into the negative 
-    # spectrum while leaving our Mark/Space tones rotating at a healthy 2000 Hz!
+    # 1. Baseband Shift (-98 kHz)
     t = np.arange(len(samples)) / samp_rate
     baseband = samples * np.exp(-1j * 2 * np.pi * 98000.0 * t)
     
-    # Low-Pass Filter: A window of 50 completely smooths out the -98kHz leakage
-    window = 50
-    smoothed = np.convolve(baseband, np.ones(window)/window, mode='same')
+    # 2. BULLETPROOF FM DEMODULATION (Conjugate Delay)
+    # This completely replaces np.unwrap() and np.angle(), making it 
+    # mathematically immune to phase-wrap static spikes!
+    phase_diff = baseband[1:] * np.conjugate(baseband[:-1])
+    inst_freq = np.angle(phase_diff) * (samp_rate / (2.0 * np.pi))
     
-    # DSP Math: Extract Instantaneous Frequency
-    phase = np.unwrap(np.angle(smoothed))
-    inst_freq = np.diff(phase) * (samp_rate / (2.0 * np.pi))
+    # 3. Handle SDR Crystal Drift
+    # We clip wide to safely capture the tones even if the hardware drifted
+    # wildly due to temperature changes.
+    inst_freq = np.clip(inst_freq, -20000.0, 25000.0)
     
-    # Clip extreme spikes safely around our new 2000 Hz baseline
-    inst_freq = np.clip(inst_freq, 1000.0, 3000.0)
-    
-    # A second gentle smoothing filter to clean up the FSK transitions
-    window2 = 50
-    inst_freq = np.convolve(inst_freq, np.ones(window2)/window2, mode='same')
+    # 4. Massive Shock Absorber (The Real Culprit)
+    # We average across 10% of a single bit (~4,400 samples at 2MSPS) to 
+    # perfectly flatten the noise floor while keeping the 170Hz shift sharp!
+    window = int(samples_per_bit * 0.10)
+    inst_freq = np.convolve(inst_freq, np.ones(window)/window, mode='same')
 
-    # =========================================================================
-    # CALIBRATE USING THE WARMUP TONE BEACON
-    # =========================================================================
-    if len(inst_freq) > 500000:
-        measured_mark = np.median(inst_freq[100000:500000])
+    # 5. Calibrate the exact Mark frequency
+    start_cal = int(samp_rate * 0.05)
+    end_cal = int(samp_rate * 0.20)
+    if len(inst_freq) > end_cal:
+        measured_mark = np.median(inst_freq[start_cal:end_cal])
     else:
-        measured_mark = 2000.0 # Our offset shift targets 2000 Hz!
+        measured_mark = 2000.0
         
-    # The Space tone is historically exactly 170 Hz higher than the Mark tone.
     dynamic_boundary = measured_mark + 85.0
-    
-    # Mark is the lower frequency tone
     is_mark = inst_freq < dynamic_boundary
 
     decoded_text = ""
