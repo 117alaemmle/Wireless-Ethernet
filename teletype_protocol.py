@@ -121,84 +121,66 @@ def decode_fsk_packet(samples, samp_rate):
     and decodes the ITA2 bits while tracking the mechanical shift state.
     """
     baud_rate = 45.45
-    samples_per_bit = int(samp_rate / baud_rate)
     
-    # =========================================================================
-    # 1. DYNAMIC FFT CALIBRATION
-    # =========================================================================
-    # The first part of the packet is a pure Mark warmup tone.
-    # We use an FFT to find the EXACT frequency the hardware drifted to!
-    start_cal = int(samp_rate * 0.05)
-    end_cal = int(samp_rate * 0.20)
-    
-    if len(samples) < end_cal:
-        return "" # Runt packet, ignore
-        
-    warmup = samples[start_cal:end_cal]
-    warmup = warmup - np.mean(warmup) # Clear DC for a clean FFT
-    
-    fft_vals = np.abs(np.fft.fft(warmup))
-    freqs = np.fft.fftfreq(len(warmup), 1.0/samp_rate)
-    
-    # Look for the peak between 50kHz and 150kHz
-    search_band = (freqs > 50000.0) & (freqs < 150000.0)
-    valid_freqs = freqs[search_band]
-    valid_ffts = fft_vals[search_band]
-    
-    if len(valid_ffts) == 0:
-        return ""
-        
-    measured_mark = valid_freqs[np.argmax(valid_ffts)]
-    measured_space = measured_mark + 170.0 # Space is physically tied to +170 Hz
-    
-    # =========================================================================
-    # 2. DUAL-FILTER NON-COHERENT AM DEMODULATION
-    # =========================================================================
+    # 1. Baseband Shift (-98 kHz)
     t = np.arange(len(samples)) / samp_rate
-    
-    # Shift both tones down to exactly 0 Hz
-    mark_baseband = samples * np.exp(-1j * 2 * np.pi * measured_mark * t)
-    space_baseband = samples * np.exp(-1j * 2 * np.pi * measured_space * t)
-    
-    # Razor-tight Low Pass Filter. 
-    # A moving average of exactly 1/170th of a second perfectly destroys 
-    # the crosstalk between the Mark and Space channels!
-    filter_len = int(samp_rate / 170.0) 
-    filter_kernel = np.ones(filter_len) / filter_len
-    
-    mark_filtered = np.convolve(mark_baseband, filter_kernel, mode='same')
-    space_filtered = np.convolve(space_baseband, filter_kernel, mode='same')
-    
-    # 3. COMPARE MAGNITUDES (Which tone is louder?)
-    is_mark = np.abs(mark_filtered) > np.abs(space_filtered)
+    baseband = samples * np.exp(-1j * 2 * np.pi * 98000.0 * t)
     
     # =========================================================================
-    # 4. DECODE THE BITSTREAM
+    # 2. DECIMATION (The Speed Fix!)
     # =========================================================================
+    # Average every 100 samples to safely down-sample from 2MSPS to 20kSPS.
+    # This makes the math 100x faster so the receiver never misses a packet!
+    decimation = 100
+    new_samp_rate = samp_rate / decimation
+    
+    # Trim the tail to make it cleanly divisible, then reshape-mean to decimate
+    trim_len = len(baseband) - (len(baseband) % decimation)
+    baseband = baseband[:trim_len]
+    downsampled = baseband.reshape(-1, decimation).mean(axis=1)
+    
+    samples_per_bit = int(new_samp_rate / baud_rate)
+    
+    # 3. CONJUGATE DELAY DEMODULATION
+    # Because we are down to 20kSPS, this math executes in milliseconds!
+    phase_diff = downsampled[1:] * np.conjugate(downsampled[:-1])
+    inst_freq = np.angle(phase_diff) * (new_samp_rate / (2.0 * np.pi))
+    
+    # 4. SHOCK ABSORBER
+    # Average across 20% of a bit length to completely flatten the remaining noise
+    window = int(samples_per_bit * 0.20)
+    inst_freq = np.convolve(inst_freq, np.ones(window)/window, mode='same')
+    
+    # 5. DYNAMIC CALIBRATION
+    start_cal = int(new_samp_rate * 0.05)
+    end_cal = int(new_samp_rate * 0.20)
+    if len(inst_freq) > end_cal:
+        measured_mark = np.median(inst_freq[start_cal:end_cal])
+    else:
+        measured_mark = 2000.0
+        
+    dynamic_boundary = measured_mark + 85.0
+    is_mark = inst_freq < dynamic_boundary
+    
+    # 6. DECODE
     decoded_text = ""
     current_state = 'LTRS' 
     
     idx = 1
     total_samples = len(is_mark)
     
-    # Scan the entire radio wave packet
     while idx < total_samples - (samples_per_bit * 8): 
-        # Detect a Falling Edge (Transition from Mark to Space) -> START BIT!
         if not is_mark[idx] and is_mark[idx - 1]:
-            
-            # Jump 1.5 bits forward to land exactly in the center of Data Bit 1
-            bit_idx = idx + int(1.5 * samples_per_bit)
+            # START BIT FOUND
+            bit_idx = idx + (1.5 * samples_per_bit)
             bits = ""
             for _ in range(5): 
                 if bit_idx >= total_samples: break
-                bits += '1' if is_mark[bit_idx] else '0'
+                bits += '1' if is_mark[int(bit_idx)] else '0'
                 bit_idx += samples_per_bit 
                 
-            # Verify the Stop Bit (Must be a Mark)
-            stop_idx = bit_idx
+            stop_idx = int(bit_idx)
             if stop_idx < total_samples and is_mark[stop_idx]:
-                
-                # --- Mechanical State Machine Router ---
                 if bits == LTRS_SHIFT:
                     current_state = 'LTRS'
                 elif bits == FIGS_SHIFT:
@@ -213,7 +195,6 @@ def decode_fsk_packet(samples, samp_rate):
                     else:
                         decoded_text += BITS_TO_FIGS.get(bits, '?')
                 
-                # Jump forward to resume hunting after the stop bit
                 idx = stop_idx + int(0.5 * samples_per_bit)
             else:
                 idx += 1 
