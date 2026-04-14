@@ -122,6 +122,11 @@ def decode_fsk_packet(samples, samp_rate):
     """
     baud_rate = 45.45
     samples_per_bit = int(samp_rate / baud_rate)
+
+    # The SDR has a massive 0 Hz spike. If we don't center the signal on the 
+    # origin (0,0), np.angle() will just wobble instead of spinning 360 degrees,
+    # completely destroying the FM demodulation math!
+    samples = samples - np.mean(samples)
     
     # DSP Math: Extract Instantaneous Frequency
     phase = np.unwrap(np.angle(samples))
