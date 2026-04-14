@@ -185,6 +185,21 @@ def decode_fsk_packet(samples, samp_rate):
     
     # Which tone is louder? (Completely immune to phase/frequency static!)
     is_mark = np.abs(mark_filtered) > np.abs(space_filtered)
+
+    # =========================================================================
+    # THE NEW FIX: INTERNAL DSP SQUELCH (Anti-Hallucination)
+    # =========================================================================
+    # Measure the total volume of the audio at every point in time
+    envelope = np.abs(mark_filtered) + np.abs(space_filtered)
+    
+    # The warmup tone (start_cal to end_cal) gives us the exact baseline volume
+    baseline_amp = np.median(envelope[start_cal:end_cal])
+    
+    # If the volume drops below 15% of the baseline, the transmitter is physically
+    # turned off. It is dead air. We force the line to 'Mark' (Idle) so it 
+    # cannot hallucinate any fake Start Bits from the background static!
+    squelch_threshold = baseline_amp * 0.15
+    is_mark[envelope < squelch_threshold] = True
     
     # =========================================================================
     # 4. DECODE
