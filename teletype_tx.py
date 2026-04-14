@@ -12,6 +12,14 @@ class TeletypeTransmitter:
 
     def transmit(self, target, my_address, msg):
         """Encodes and streams an FSK message to the ADALM-PLUTO hardware."""
+
+        # ========================================================
+        # THE FIX: Strip the routing port before doing anything else!
+        # This saves ~165ms of physical airtime per packet.
+        # ========================================================
+        if len(msg) > 0 and msg[0] in ["C", "F", "B"]:
+            msg = msg[1:]
+
         packet = f"{target}{my_address}{msg}"
         
         if self.log:
