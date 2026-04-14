@@ -19,14 +19,8 @@ class TeletypeTransmitter:
         if self.set_led:
             self.set_led("TX", "red")
             
-        # 1. Generate the continuous math wave
         samples, _ = teletype_protocol.generate_fsk_signal(packet, self.samp_rate)
         
-        # ========================================================
-        # THE FIX: Safe Chunking
-        # We use a 1 Mega-Sample chunk (about 0.5 seconds of audio).
-        # This prevents Errno -27 (RAM Overflow) on long messages!
-        # ========================================================
         chunk_size = 1048576 
         
         try:
@@ -39,12 +33,20 @@ class TeletypeTransmitter:
         for i in range(0, len(samples), chunk_size):
             chunk = samples[i:i+chunk_size]
             
-            # Pad the final chunk so the buffer size remains perfectly static
             if len(chunk) < chunk_size:
                 pad = np.zeros(chunk_size - len(chunk), dtype=np.complex128)
                 chunk = np.concatenate((chunk, pad))
                 
             self.sdr.tx(chunk)
+            
+        # ========================================================
+        # THE FIX: DMA Queue Drain Time
+        # The SDR kernel holds up to 4 buffers in memory. If we 
+        # destroy the buffer instantly, it deletes the last 2 seconds 
+        # of audio! We must sleep to let the hardware finish radiating.
+        # ========================================================
+        drain_time = (chunk_size / self.samp_rate) * 4
+        time.sleep(drain_time)
             
         self.sdr.tx_destroy_buffer()
         
