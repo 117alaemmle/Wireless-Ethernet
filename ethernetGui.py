@@ -28,10 +28,11 @@ class MarconiNode:
             self.sdr.sample_rate = int(config.SAMP_RATE)
             self.sdr.tx_lo = int(config.FREQ)
             self.sdr.rx_lo = int(config.FREQ)
-            self.sdr.tx_hardwaregain_chan0 = -10 #-10DB for direct wired connection
-            #self.sdr.tx_hardwaregain_chan0 = 0 #0DB for antenna use, gives it a boost to be able to hear anything at all.
-            self.sdr.rx_hardwaregain_chan0 = -20 #25DB gain for direct connection.
-            #self.sdr.rx_hardwaregain_chan0 = 55 #bigger gain for antennas.
+            #self.sdr.tx_hardwaregain_chan0 = -10 #Last known good antenna setting
+            #self.sdr.rx_hardwaregain_chan0 = -20 #Last known good antenna setting
+            self.sdr.tx_hardwaregain_chan0 = 0
+            # #25DB gain for direct connection.
+            self.sdr.rx_hardwaregain_chan0 = 50
             self.sdr.rx_buffer_size = 500 # Increasing buffer size to prevent dropping samples
             #self.sdr.rx_buffer_size = 32768 #We need to change buffer size depending on the type of protocol. Marconi requires precise timing, smaller buffer size.
         except Exception as e:
