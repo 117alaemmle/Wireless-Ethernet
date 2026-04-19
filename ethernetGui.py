@@ -29,10 +29,10 @@ class MarconiNode:
             self.sdr.tx_lo = int(config.FREQ)
             self.sdr.rx_lo = int(config.FREQ)
             #self.sdr.tx_hardwaregain_chan0 = -10 #-10DB for antennas
-            self.sdr.tx_hardwaregain_chan0 = 0 #0DB for direct wired connection.
+            self.sdr.tx_hardwaregain_chan0 = 10 # for direct wired connection.
             #RX Gain:
             #self.sdr.rx_hardwaregain_chan0 = -20 #-20 for antennas.
-            self.sdr.rx_hardwaregain_chan0 = 55 #bigger gain for antennas.
+            self.sdr.rx_hardwaregain_chan0 = 85 #bigger gain for antennas.
             
             self.sdr.rx_buffer_size = 500 # Increasing buffer size to prevent dropping samples
             #self.sdr.rx_buffer_size = 32768 #We need to change buffer size depending on the type of protocol. Marconi requires precise timing, smaller buffer size.
@@ -93,7 +93,7 @@ class MarconiNode:
         ############################
 
         # --- LIVE THRESHOLD FIX ---
-        self.current_threshold = 200.0 # Instance variable replaces the global THRESHOLD
+        self.current_threshold = 70.0 # Instance variable replaces the global THRESHOLD
 
         meter_frame = tk.Frame(root)
         meter_frame.pack(pady=5, fill="x", padx=20)

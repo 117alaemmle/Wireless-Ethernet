@@ -2,7 +2,6 @@ import os
 import uuid
 
 # ==============================================================================
-# OS-LEVEL TIMER FIX FOR WINDOWS 10
 # Forces the Windows scheduler to 1ms resolution so time.sleep() doesn't stutter.
 # ==============================================================================
 if os.name == 'nt':
